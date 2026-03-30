@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Power BI Migration Optimizer</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            fabric: { DEFAULT: '#0078D4', dark: '#005A9E', light: '#C7E0F4' },
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { font-family: 'Segoe UI', system-ui, sans-serif; }
+    .score-bar-fill { transition: width 0.6s cubic-bezier(.4,0,.2,1); }
+    .card-hover { transition: box-shadow .2s, transform .15s; }
+    .card-hover:hover { box-shadow: 0 8px 24px rgba(0,0,0,.12); transform: translateY(-1px); }
+    .badge-green  { background:#d1fae5; color:#065f46; }
+    .badge-blue   { background:#dbeafe; color:#1e40af; }
+    .badge-orange { background:#ffedd5; color:#9a3412; }
+    .badge-red    { background:#fee2e2; color:#991b1b; }
+    .badge-gray   { background:#f3f4f6; color:#374151; }
+    .dim-bar { height:8px; border-radius:4px; background:#e5e7eb; overflow:hidden; }
+    .dim-fill { height:100%; border-radius:4px; transition: width .5s ease; }
+    .spinner { border:3px solid #e5e7eb; border-top-color:#0078D4; border-radius:50%; width:28px; height:28px; animation:spin .8s linear infinite; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+    .slide-in { animation: slideIn .25s ease; }
+    @keyframes slideIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+    .modal-bg { background:rgba(0,0,0,.5); backdrop-filter:blur(2px); }
+    select, input { outline: none; }
+    select:focus, input:focus { ring: 2px; ring-color: #0078D4; }
+  </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+
+<!-- ── TOP NAV ─────────────────────────────────────────────────────────────── -->
+<nav class="bg-fabric text-white shadow-lg sticky top-0 z-30">
+  <div class="max-w-screen-xl mx-auto px-6 py-3 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <svg class="w-7 h-7" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <rect x="3" y="3" width="8" height="8" rx="1.5" fill="white" opacity=".9"/>
+        <rect x="13" y="3" width="8" height="8" rx="1.5" fill="white" opacity=".6"/>
+        <rect x="3" y="13" width="8" height="8" rx="1.5" fill="white" opacity=".6"/>
+        <rect x="13" y="13" width="8" height="8" rx="1.5" fill="white" opacity=".3"/>
+      </svg>
+      <div>
+        <div class="font-semibold text-base leading-tight">Power BI Migration Optimizer</div>
+        <div class="text-xs text-blue-200 leading-tight">Fabric Migration Readiness Platform</div>
+      </div>
+    </div>
+    <div class="flex items-center gap-3">
+      <span id="mode-badge" class="text-xs px-2.5 py-1 rounded-full bg-blue-800 font-medium">Demo Mode</span>
+      <button onclick="openConnectModal()" class="text-sm bg-white text-fabric px-3 py-1.5 rounded-md font-medium hover:bg-blue-50 transition">
+        Connect to Power BI
+      </button>
+      <a href="/api/export/csv" class="text-sm border border-white/40 px-3 py-1.5 rounded-md hover:bg-blue-700 transition">
+        Export CSV
+      </a>
+    </div>
+  </div>
+</nav>
+
+<!-- ── MAIN ────────────────────────────────────────────────────────────────── -->
+<div class="max-w-screen-xl mx-auto px-6 py-8">
+
+  <!-- Summary Cards -->
+  <div id="summary-cards" class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4 mb-8">
+    <div class="col-span-2 md:col-span-4 lg:col-span-7 flex items-center justify-center py-6">
+      <div class="spinner"></div>
+    </div>
+  </div>
+
+  <!-- Filters + Search -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-6 flex flex-wrap gap-3 items-center">
+    <input id="search-input" type="text" placeholder="Search datasets or workspaces..."
+      class="flex-1 min-w-48 border border-gray-300 rounded-lg px-3 py-2 text-sm"
+      oninput="applyFilters()" />
+    <select id="filter-decision" class="border border-gray-300 rounded-lg px-3 py-2 text-sm" onchange="applyFilters()">
+      <option value="">All Decisions</option>
+      <option value="Migrate as-is">Migrate as-is</option>
+      <option value="Fix then migrate">Fix then migrate</option>
+      <option value="Major refactor">Major refactor</option>
+      <option value="decommission">Retire / Decommission</option>
+    </select>
+    <select id="filter-workspace" class="border border-gray-300 rounded-lg px-3 py-2 text-sm" onchange="applyFilters()">
+      <option value="">All Workspaces</option>
+    </select>
+    <select id="filter-risk" class="border border-gray-300 rounded-lg px-3 py-2 text-sm" onchange="applyFilters()">
+      <option value="">All Risk Levels</option>
+      <option value="Low">Low Risk</option>
+      <option value="Medium">Medium Risk</option>
+      <option value="High">High Risk</option>
+    </select>
+    <button onclick="clearFilters()" class="text-sm text-gray-500 hover:text-gray-800 underline">Clear</button>
+    <span id="result-count" class="ml-auto text-sm text-gray-500"></span>
+  </div>
+
+  <!-- Dataset Table -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+    <table class="w-full text-sm">
+      <thead class="bg-gray-50 border-b border-gray-200">
+        <tr>
+          <th class="text-left px-5 py-3 font-semibold text-gray-600 cursor-pointer hover:text-gray-900" onclick="sortBy('dataset_name')">Dataset <span class="sort-icon">↕</span></th>
+          <th class="text-left px-4 py-3 font-semibold text-gray-600 hidden md:table-cell cursor-pointer hover:text-gray-900" onclick="sortBy('workspace_name')">Workspace <span class="sort-icon">↕</span></th>
+          <th class="text-left px-4 py-3 font-semibold text-gray-600 hidden lg:table-cell">Owner</th>
+          <th class="text-center px-4 py-3 font-semibold text-gray-600 cursor-pointer hover:text-gray-900" onclick="sortBy('total_score')">Score <span class="sort-icon">↕</span></th>
+          <th class="text-left px-4 py-3 font-semibold text-gray-600 w-36">Score Breakdown</th>
+          <th class="text-left px-4 py-3 font-semibold text-gray-600">Decision</th>
+          <th class="text-center px-4 py-3 font-semibold text-gray-600 hidden lg:table-cell">Risk</th>
+          <th class="text-center px-4 py-3 font-semibold text-gray-600 hidden xl:table-cell">Effort</th>
+          <th class="px-4 py-3"></th>
+        </tr>
+      </thead>
+      <tbody id="dataset-table-body">
+        <tr><td colspan="9" class="text-center py-12 text-gray-400">
+          <div class="flex justify-center"><div class="spinner"></div></div>
+          <div class="mt-3">Loading datasets...</div>
+        </td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ── DETAIL MODAL ────────────────────────────────────────────────────────── -->
+<div id="detail-modal" class="fixed inset-0 z-50 hidden modal-bg flex items-start justify-center pt-12 pb-8 overflow-y-auto">
+  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-3xl mx-4 slide-in">
+    <div id="modal-content" class="p-6">Loading...</div>
+  </div>
+</div>
+
+<!-- ── CONNECT MODAL ───────────────────────────────────────────────────────── -->
+<div id="connect-modal" class="fixed inset-0 z-50 hidden modal-bg flex items-center justify-center">
+  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-lg mx-4 p-6 slide-in">
+    <div class="flex items-center justify-between mb-5">
+      <h2 class="text-lg font-semibold text-gray-900">Connect to Power BI</h2>
+      <button onclick="closeConnectModal()" class="text-gray-400 hover:text-gray-600 text-xl">&times;</button>
+    </div>
+    <p class="text-sm text-gray-500 mb-5">
+      Enter your Azure AD service principal credentials. The app needs
+      <strong>Dataset.Read.All</strong> and <strong>Workspace.Read.All</strong> permissions.
+    </p>
+    <div class="space-y-4">
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Tenant ID</label>
+        <input id="inp-tenant" type="text" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+          class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Client (App) ID</label>
+        <input id="inp-client" type="text" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+          class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Client Secret</label>
+        <input id="inp-secret" type="password" placeholder="Your app secret value"
+          class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+      </div>
+    </div>
+    <div id="connect-error" class="hidden mt-3 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2"></div>
+    <div class="flex gap-3 mt-6">
+      <button onclick="connectToPBI()" id="connect-btn"
+        class="flex-1 bg-fabric text-white py-2.5 rounded-lg font-medium hover:bg-fabric-dark transition text-sm">
+        Connect &amp; Load Datasets
+      </button>
+      <button onclick="closeConnectModal()" class="px-4 py-2.5 border border-gray-300 rounded-lg text-sm hover:bg-gray-50">
+        Cancel
+      </button>
+    </div>
+    <button onclick="resetDemo()" class="w-full mt-3 text-xs text-gray-400 hover:text-gray-600 underline">
+      Switch back to demo data
+    </button>
+  </div>
+</div>
+
+<script>
+// ── State ────────────────────────────────────────────────────────────────────
+let allDatasets = [];
+let filteredDatasets = [];
+let sortField = 'total_score';
+let sortDir = -1; // -1 = desc
+
+// ── Boot ─────────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  loadSummary();
+  loadDatasets();
+});
+
+// ── Data fetching ─────────────────────────────────────────────────────────────
+async function loadSummary() {
+  const res = await fetch('/api/summary');
+  const s = await res.json();
+  renderSummaryCards(s);
+  document.getElementById('mode-badge').textContent =
+    s.mode === 'live' ? 'Live – Power BI' : 'Demo Mode';
+}
+
+async function loadDatasets() {
+  const res = await fetch('/api/datasets');
+  allDatasets = await res.json();
+
+  // Populate workspace filter
+  const ws = [...new Set(allDatasets.map(d => d.workspace_name))].sort();
+  const sel = document.getElementById('filter-workspace');
+  ws.forEach(w => {
+    const opt = document.createElement('option');
+    opt.value = w; opt.textContent = w;
+    sel.appendChild(opt);
+  });
+
+  filteredDatasets = [...allDatasets];
+  renderTable(filteredDatasets);
+}
+
+// ── Summary cards ─────────────────────────────────────────────────────────────
+function renderSummaryCards(s) {
+  const cards = [
+    { label: 'Total Datasets', value: s.total, sub: `${s.workspaces ? Object.keys(s.workspaces).length : 0} workspaces`, color: 'bg-gray-50 border-gray-200', icon: '📊' },
+    { label: 'Avg Score', value: s.avg_score, sub: 'out of 100', color: 'bg-blue-50 border-blue-200', icon: '🎯' },
+    { label: 'Migrate As-Is', value: s.migrate, sub: 'score ≥ 80', color: 'bg-green-50 border-green-200', icon: '✅' },
+    { label: 'Fix & Migrate', value: s.fix_migrate, sub: 'score 60–79', color: 'bg-blue-50 border-blue-200', icon: '🔧' },
+    { label: 'Major Refactor', value: s.major_refactor, sub: 'score 40–59', color: 'bg-orange-50 border-orange-200', icon: '⚠️' },
+    { label: 'Retire / Decommission', value: s.retire, sub: 'score < 40', color: 'bg-red-50 border-red-200', icon: '❌' },
+    { label: 'High Risk', value: s.high_risk, sub: 'need attention', color: 'bg-yellow-50 border-yellow-200', icon: '🔴' },
+  ];
+
+  document.getElementById('summary-cards').innerHTML = cards.map(c => `
+    <div class="card-hover bg-white border ${c.color} rounded-xl p-4 flex flex-col gap-1 cursor-pointer"
+         onclick="filterByCard('${c.label}')">
+      <div class="flex items-center gap-2 text-gray-500 text-xs font-medium uppercase tracking-wide">
+        <span>${c.icon}</span> ${c.label}
+      </div>
+      <div class="text-3xl font-bold text-gray-800">${c.value}</div>
+      <div class="text-xs text-gray-400">${c.sub}</div>
+    </div>
+  `).join('');
+}
+
+function filterByCard(label) {
+  const map = {
+    'Migrate As-Is': 'Migrate as-is',
+    'Fix & Migrate': 'Fix then migrate',
+    'Major Refactor': 'Major refactor',
+    'Retire / Decommission': 'decommission',
+  };
+  const v = map[label];
+  if (v) {
+    document.getElementById('filter-decision').value = v;
+    applyFilters();
+  }
+}
+
+// ── Table rendering ───────────────────────────────────────────────────────────
+function renderTable(datasets) {
+  const tbody = document.getElementById('dataset-table-body');
+  document.getElementById('result-count').textContent =
+    `${datasets.length} dataset${datasets.length !== 1 ? 's' : ''}`;
+
+  if (!datasets.length) {
+    tbody.innerHTML = `<tr><td colspan="9" class="text-center py-12 text-gray-400">No datasets match your filters.</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = datasets.map(d => {
+    const scorePct = d.total_score;
+    const scoreColor = scorePct >= 80 ? 'text-green-700' : scorePct >= 60 ? 'text-blue-700' : scorePct >= 40 ? 'text-orange-600' : 'text-red-700';
+    const barColor = scorePct >= 80 ? 'bg-green-500' : scorePct >= 60 ? 'bg-blue-500' : scorePct >= 40 ? 'bg-orange-400' : 'bg-red-500';
+    const badge = decisionBadge(d.decision);
+    const riskBadge = d.migration_risk === 'High'
+      ? '<span class="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-medium">High</span>'
+      : d.migration_risk === 'Medium'
+      ? '<span class="text-xs px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-700 font-medium">Med</span>'
+      : '<span class="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">Low</span>';
+
+    const dims = d.dimensions || [];
+    const miniBar = dims.map(dim => {
+      const pct = dim.pct;
+      const c = pct >= 80 ? '#22c55e' : pct >= 60 ? '#3b82f6' : pct >= 40 ? '#f97316' : '#ef4444';
+      return `<div title="${dim.name}: ${pct}%" style="flex:1;height:6px;border-radius:3px;background:#e5e7eb;overflow:hidden">
+        <div style="width:${pct}%;height:100%;background:${c};transition:width .5s"></div>
+      </div>`;
+    }).join('');
+
+    return `
+      <tr class="border-b border-gray-100 hover:bg-gray-50 transition cursor-pointer" onclick="openDetail('${d.dataset_id}')">
+        <td class="px-5 py-3.5">
+          <div class="font-medium text-gray-900 text-sm">${escHtml(d.dataset_name)}</div>
+          <div class="text-xs text-gray-400 mt-0.5 md:hidden">${escHtml(d.workspace_name)}</div>
+        </td>
+        <td class="px-4 py-3.5 text-gray-600 text-sm hidden md:table-cell">${escHtml(d.workspace_name)}</td>
+        <td class="px-4 py-3.5 text-gray-500 text-sm hidden lg:table-cell">${escHtml(d.owner)}</td>
+        <td class="px-4 py-3.5 text-center">
+          <span class="text-2xl font-bold ${scoreColor}">${d.total_score}</span>
+          <div class="w-12 mx-auto mt-1 h-1.5 rounded-full bg-gray-200 overflow-hidden">
+            <div class="h-full ${barColor} score-bar-fill" style="width:${scorePct}%"></div>
+          </div>
+        </td>
+        <td class="px-4 py-3.5">
+          <div class="flex gap-0.5 items-end">${miniBar}</div>
+          <div class="text-xs text-gray-400 mt-1 hidden xl:block">${dims.map(d => d.name.split(' ')[0]).join(' · ')}</div>
+        </td>
+        <td class="px-4 py-3.5">${badge}</td>
+        <td class="px-4 py-3.5 text-center hidden lg:table-cell">${riskBadge}</td>
+        <td class="px-4 py-3.5 text-center hidden xl:table-cell">
+          ${d.estimated_effort_days > 0
+            ? `<span class="text-sm text-gray-600">${d.estimated_effort_days}d</span>`
+            : '<span class="text-xs text-green-600">None</span>'}
+        </td>
+        <td class="px-4 py-3.5 text-right">
+          <svg class="w-4 h-4 text-gray-400 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+          </svg>
+        </td>
+      </tr>`;
+  }).join('');
+}
+
+function decisionBadge(decision) {
+  if (decision.includes('Migrate as-is'))
+    return `<span class="text-xs px-2.5 py-1 rounded-full badge-green font-medium whitespace-nowrap">✅ Migrate as-is</span>`;
+  if (decision.includes('Fix then'))
+    return `<span class="text-xs px-2.5 py-1 rounded-full badge-blue font-medium whitespace-nowrap">🔧 Fix &amp; Migrate</span>`;
+  if (decision.includes('Major refactor'))
+    return `<span class="text-xs px-2.5 py-1 rounded-full badge-orange font-medium whitespace-nowrap">⚠️ Major Refactor</span>`;
+  return `<span class="text-xs px-2.5 py-1 rounded-full badge-red font-medium whitespace-nowrap">❌ Retire</span>`;
+}
+
+// ── Filters ───────────────────────────────────────────────────────────────────
+function applyFilters() {
+  const q = document.getElementById('search-input').value.toLowerCase();
+  const dec = document.getElementById('filter-decision').value;
+  const ws = document.getElementById('filter-workspace').value;
+  const risk = document.getElementById('filter-risk').value;
+
+  filteredDatasets = allDatasets.filter(d => {
+    const matchQ = !q || d.dataset_name.toLowerCase().includes(q) || d.workspace_name.toLowerCase().includes(q);
+    const matchDec = !dec || d.decision.includes(dec);
+    const matchWs = !ws || d.workspace_name === ws;
+    const matchRisk = !risk || d.migration_risk === risk;
+    return matchQ && matchDec && matchWs && matchRisk;
+  });
+
+  sortDatasets();
+}
+
+function clearFilters() {
+  document.getElementById('search-input').value = '';
+  document.getElementById('filter-decision').value = '';
+  document.getElementById('filter-workspace').value = '';
+  document.getElementById('filter-risk').value = '';
+  filteredDatasets = [...allDatasets];
+  sortDatasets();
+}
+
+// ── Sorting ───────────────────────────────────────────────────────────────────
+function sortBy(field) {
+  if (sortField === field) sortDir *= -1;
+  else { sortField = field; sortDir = field === 'total_score' ? -1 : 1; }
+  sortDatasets();
+}
+
+function sortDatasets() {
+  filteredDatasets.sort((a, b) => {
+    let av = a[sortField], bv = b[sortField];
+    if (typeof av === 'string') av = av.toLowerCase();
+    if (typeof bv === 'string') bv = bv.toLowerCase();
+    return av < bv ? -sortDir : av > bv ? sortDir : 0;
+  });
+  renderTable(filteredDatasets);
+}
+
+// ── Detail Modal ─────────────────────────────────────────────────────────────
+async function openDetail(datasetId) {
+  document.getElementById('detail-modal').classList.remove('hidden');
+  document.getElementById('modal-content').innerHTML = `
+    <div class="flex justify-center py-12"><div class="spinner"></div></div>`;
+  document.body.style.overflow = 'hidden';
+
+  const res = await fetch(`/api/datasets/${datasetId}`);
+  const d = await res.json();
+  renderDetailModal(d);
+}
+
+function renderDetailModal(d) {
+  const totalPct = d.total_score;
+  const ringColor = totalPct >= 80 ? '#22c55e' : totalPct >= 60 ? '#3b82f6' : totalPct >= 40 ? '#f97316' : '#ef4444';
+  const dimColors = ['#6366f1','#3b82f6','#06b6d4','#10b981','#f59e0b'];
+
+  const dimsHtml = (d.dimensions || []).map((dim, i) => {
+    const c = dimColors[i % dimColors.length];
+    const issueHtml = dim.issues.length
+      ? dim.issues.map(iss => `<li class="text-xs text-gray-600 flex gap-1.5"><span class="text-orange-400 mt-0.5">⚠</span>${escHtml(iss)}</li>`).join('')
+      : `<li class="text-xs text-green-600 flex gap-1.5"><span>✓</span>No issues detected</li>`;
+    const recHtml = dim.recommendations.length
+      ? dim.recommendations.map(r => `<li class="text-xs text-gray-600 flex gap-1.5"><span class="text-blue-400 mt-0.5">→</span>${escHtml(r)}</li>`).join('')
+      : '';
+
+    return `
+      <div class="bg-gray-50 rounded-xl p-4 border border-gray-100">
+        <div class="flex items-center justify-between mb-2">
+          <span class="font-semibold text-sm text-gray-800">${escHtml(dim.name)}</span>
+          <span class="font-bold text-sm" style="color:${c}">${dim.score.toFixed(1)} / ${dim.max_score}</span>
+        </div>
+        <div class="dim-bar mb-3">
+          <div class="dim-fill" style="width:${dim.pct}%;background:${c}"></div>
+        </div>
+        <ul class="space-y-1 mb-2">${issueHtml}</ul>
+        ${recHtml ? `<ul class="space-y-1 mt-2 pt-2 border-t border-gray-200">${recHtml}</ul>` : ''}
+      </div>`;
+  }).join('');
+
+  const fixesHtml = (d.priority_fixes || []).map((fix, i) =>
+    `<div class="flex gap-2.5 text-sm text-gray-700">
+      <span class="flex-shrink-0 w-5 h-5 rounded-full bg-fabric text-white text-xs flex items-center justify-center font-bold">${i+1}</span>
+      <span>${escHtml(fix)}</span>
+    </div>`
+  ).join('');
+
+  const badge = decisionBadge(d.decision);
+  const ownerDecOptions = ['', 'migrate', 'fix_migrate', 'retire'].map(v => {
+    const labels = {'':'— Pending owner decision —','migrate':'Approve: Migrate as-is','fix_migrate':'Approve: Fix then migrate','retire':'Retire / Decommission'};
+    const sel = d.owner_decision === v ? 'selected' : '';
+    return `<option value="${v}" ${sel}>${labels[v]}</option>`;
+  }).join('');
+
+  document.getElementById('modal-content').innerHTML = `
+    <div class="flex items-start justify-between mb-5">
+      <div class="flex-1 pr-4">
+        <div class="text-xs text-gray-400 mb-1">${escHtml(d.workspace_name)}</div>
+        <h2 class="text-xl font-bold text-gray-900 mb-1">${escHtml(d.dataset_name)}</h2>
+        <div class="flex flex-wrap gap-2 items-center">
+          ${badge}
+          <span class="text-xs text-gray-400">Owner: ${escHtml(d.owner)}</span>
+          ${d.model_size_gb ? `<span class="text-xs text-gray-400">Size: ${d.model_size_gb.toFixed(1)} GB</span>` : ''}
+          ${d.active_users_30d !== undefined ? `<span class="text-xs text-gray-400">Users: ${d.active_users_30d} (30d)</span>` : ''}
+        </div>
+      </div>
+      <div class="flex flex-col items-center flex-shrink-0">
+        <div class="relative w-20 h-20">
+          <svg viewBox="0 0 36 36" class="w-20 h-20 -rotate-90">
+            <circle cx="18" cy="18" r="15.9" fill="none" stroke="#e5e7eb" stroke-width="3"/>
+            <circle cx="18" cy="18" r="15.9" fill="none" stroke="${ringColor}" stroke-width="3"
+              stroke-dasharray="${totalPct} ${100-totalPct}" stroke-linecap="round"/>
+          </svg>
+          <div class="absolute inset-0 flex flex-col items-center justify-center">
+            <span class="text-2xl font-black" style="color:${ringColor}">${d.total_score}</span>
+            <span class="text-xs text-gray-400 -mt-1">/ 100</span>
+          </div>
+        </div>
+        <div class="text-xs text-gray-500 mt-1">Risk: <span class="font-medium ${d.migration_risk==='High'?'text-red-600':d.migration_risk==='Medium'?'text-yellow-600':'text-green-600'}">${d.migration_risk}</span></div>
+        ${d.estimated_effort_days > 0 ? `<div class="text-xs text-gray-500">Effort: <span class="font-medium">${d.estimated_effort_days}d</span></div>` : ''}
+      </div>
+      <button onclick="closeDetail()" class="ml-3 text-gray-400 hover:text-gray-600 text-2xl flex-shrink-0">&times;</button>
+    </div>
+
+    <!-- Score dimensions -->
+    <h3 class="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-3">Score Breakdown</h3>
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">${dimsHtml}</div>
+
+    <!-- Priority fix list -->
+    ${d.priority_fixes && d.priority_fixes.length ? `
+    <div class="bg-blue-50 rounded-xl p-4 border border-blue-100 mb-5">
+      <h3 class="text-sm font-semibold text-blue-900 mb-3">Priority Fix List</h3>
+      <div class="space-y-2">${fixesHtml}</div>
+    </div>` : ''}
+
+    <!-- Owner decision -->
+    <div class="border border-gray-200 rounded-xl p-4">
+      <h3 class="text-sm font-semibold text-gray-700 mb-3">Owner Migration Decision</h3>
+      <div class="flex gap-3 items-center">
+        <select id="owner-decision-sel" class="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm">
+          ${ownerDecOptions}
+        </select>
+        <button onclick="saveOwnerDecision('${d.dataset_id}')"
+          class="bg-fabric text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-fabric-dark transition">
+          Save
+        </button>
+      </div>
+      <div id="decision-saved" class="hidden mt-2 text-xs text-green-600">Decision saved.</div>
+    </div>
+  `;
+}
+
+async function saveOwnerDecision(datasetId) {
+  const val = document.getElementById('owner-decision-sel').value;
+  await fetch(`/api/datasets/${datasetId}/decision`, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({dataset_id: datasetId, decision: val}),
+  });
+  document.getElementById('decision-saved').classList.remove('hidden');
+  await loadDatasets();
+}
+
+function closeDetail() {
+  document.getElementById('detail-modal').classList.add('hidden');
+  document.body.style.overflow = '';
+}
+
+document.getElementById('detail-modal').addEventListener('click', e => {
+  if (e.target === document.getElementById('detail-modal')) closeDetail();
+});
+
+// ── Connect Modal ─────────────────────────────────────────────────────────────
+function openConnectModal() {
+  document.getElementById('connect-modal').classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+}
+
+function closeConnectModal() {
+  document.getElementById('connect-modal').classList.add('hidden');
+  document.body.style.overflow = '';
+}
+
+async function connectToPBI() {
+  const btn = document.getElementById('connect-btn');
+  const errDiv = document.getElementById('connect-error');
+  errDiv.classList.add('hidden');
+  btn.textContent = 'Connecting...';
+  btn.disabled = true;
+
+  const body = {
+    tenant_id: document.getElementById('inp-tenant').value.trim(),
+    client_id: document.getElementById('inp-client').value.trim(),
+    client_secret: document.getElementById('inp-secret').value.trim(),
+  };
+
+  try {
+    const res = await fetch('/api/connect', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Connection failed');
+    closeConnectModal();
+    await loadSummary();
+    await loadDatasets();
+  } catch (e) {
+    errDiv.textContent = e.message;
+    errDiv.classList.remove('hidden');
+  } finally {
+    btn.textContent = 'Connect & Load Datasets';
+    btn.disabled = false;
+  }
+}
+
+async function resetDemo() {
+  await fetch('/api/reset-demo', {method:'POST'});
+  closeConnectModal();
+  await loadSummary();
+  await loadDatasets();
+}
+
+// ── Utils ─────────────────────────────────────────────────────────────────────
+function escHtml(str) {
+  if (!str) return '';
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+</script>
+</body>
+</html>
