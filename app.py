@@ -6,12 +6,15 @@ Then open:  http://localhost:8000
 
 import json
 import os
+import secrets
 from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Security, Depends
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.security.api_key import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -19,7 +22,33 @@ from engine.scorer import score_dataset, DatasetInput, MigrationDecision
 from engine.demo_data import DEMO_DATASETS
 from engine.pbi_client import PBIClient
 
-app = FastAPI(title="Power BI Migration Optimizer", version="1.0.0")
+app = FastAPI(
+    title="Power BI Migration Optimizer",
+    version="1.0.0",
+    description="Score Power BI semantic models for Microsoft Fabric migration readiness.",
+)
+
+# ── CORS — required for Copilot Studio custom connector ───────────────────────
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://make.powerautomate.com", "https://copilotstudio.microsoft.com",
+                   "https://*.azure-apim.net", "http://localhost:8000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ── API Key auth — used by the Copilot Studio custom connector ─────────────────
+API_KEY = os.getenv("OPTIMIZER_API_KEY", "demo-key-change-in-production")
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+
+def require_api_key(key: str = Security(api_key_header)):
+    """Allow open access in demo mode; require key in live/production."""
+    if API_KEY == "demo-key-change-in-production":
+        return  # demo mode — no auth required
+    if key != API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid or missing API key")
 
 # ── In-memory state ────────────────────────────────────────────────────────────
 _dataset_cache: dict[str, DatasetInput] = {}
@@ -123,12 +152,12 @@ def _score_all() -> list[dict]:
 
 # ── API Routes ─────────────────────────────────────────────────────────────────
 
-@app.get("/api/status")
+@app.get("/api/status", dependencies=[Depends(require_api_key)])
 def get_status():
     return {"mode": _mode, "dataset_count": len(_dataset_cache)}
 
 
-@app.get("/api/datasets")
+@app.get("/api/datasets", dependencies=[Depends(require_api_key)])
 def get_datasets(
     workspace: Optional[str] = Query(None),
     decision: Optional[str] = Query(None),
@@ -150,7 +179,7 @@ def get_datasets(
     return results
 
 
-@app.get("/api/datasets/{dataset_id}")
+@app.get("/api/datasets/{dataset_id}", dependencies=[Depends(require_api_key)])
 def get_dataset(dataset_id: str):
     """Return full scoring detail for a single dataset."""
     if dataset_id not in _dataset_cache:
@@ -184,7 +213,7 @@ def get_dataset(dataset_id: str):
     }
 
 
-@app.get("/api/summary")
+@app.get("/api/summary", dependencies=[Depends(require_api_key)])
 def get_summary():
     """Return summary stats for the dashboard cards."""
     results = _score_all()
@@ -247,7 +276,7 @@ def reset_demo():
     return {"status": "demo", "dataset_count": len(_dataset_cache)}
 
 
-@app.post("/api/datasets/{dataset_id}/bpa-update")
+@app.post("/api/datasets/{dataset_id}/bpa-update", dependencies=[Depends(require_api_key)])
 def update_bpa_metrics(dataset_id: str, update: BPAUpdate):
     """
     Accept BPA/memory/query metrics from a Semantic Link notebook or manual input.
@@ -260,13 +289,40 @@ def update_bpa_metrics(dataset_id: str, update: BPAUpdate):
     return {"status": "updated", "dataset_id": dataset_id}
 
 
-@app.post("/api/datasets/{dataset_id}/decision")
+@app.post("/api/datasets/{dataset_id}/decision", dependencies=[Depends(require_api_key)])
 def set_owner_decision(dataset_id: str, decision: OwnerDecision):
     """Record the owner's migration decision for a dataset."""
     if dataset_id not in _dataset_cache:
         raise HTTPException(status_code=404, detail="Dataset not found")
     _decisions[dataset_id] = decision.decision
     return {"status": "saved", "dataset_id": dataset_id, "decision": decision.decision}
+
+
+@app.get("/api/workspaces", dependencies=[Depends(require_api_key)])
+def get_workspaces():
+    """Return distinct workspace names — used by the Copilot Studio agent menu."""
+    results = _score_all()
+    ws = sorted({r["workspace_name"] for r in results})
+    return [{"workspace_name": w, "dataset_count": sum(1 for r in results if r["workspace_name"] == w)} for w in ws]
+
+
+@app.get("/api/datasets/search", dependencies=[Depends(require_api_key)])
+def search_datasets(q: str = Query(..., description="Partial dataset or workspace name")):
+    """
+    Fuzzy name search — called by the Copilot Studio agent when an analyst
+    types a dataset name in conversation.
+    Returns top 5 matches ranked by score descending.
+    """
+    results = _score_all()
+    q_lower = q.lower()
+    matches = [
+        r for r in results
+        if q_lower in r["dataset_name"].lower() or q_lower in r["workspace_name"].lower()
+    ]
+    matches = sorted(matches, key=lambda x: x["total_score"], reverse=True)[:5]
+    if not matches:
+        raise HTTPException(status_code=404, detail=f"No datasets matching '{q}' found.")
+    return matches
 
 
 @app.get("/api/export/csv")

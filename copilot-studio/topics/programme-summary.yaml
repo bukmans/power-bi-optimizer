@@ -1,0 +1,134 @@
+kind: AdaptiveDialog
+modelDescription: |
+  Shows the overall migration programme summary — total datasets, counts
+  by decision, average score, and total effort days. Useful for leads and
+  programme managers who want a quick status update.
+
+triggerQueries:
+  - programme summary
+  - migration summary
+  - overall status
+  - how many datasets
+  - what's our migration status
+  - give me a summary
+  - programme status
+  - migration progress
+
+beginDialog:
+  kind: OnRecognizedIntent
+  actions:
+
+    - kind: InvokeConnectorAction
+      id: getSummary
+      connectorId: pbi-migration-optimizer
+      operationId: GetSummary
+      output:
+        binding: Topic.Summary
+
+    - kind: SendActivity
+      activity:
+        attachments:
+          - contentType: application/vnd.microsoft.card.adaptive
+            content:
+              type: AdaptiveCard
+              version: "1.5"
+              body:
+                - type: TextBlock
+                  text: "📊 Fabric Migration Programme — Status"
+                  weight: Bolder
+                  size: Large
+
+                - type: ColumnSet
+                  spacing: Medium
+                  columns:
+                    - type: Column
+                      width: stretch
+                      style: good
+                      items:
+                        - type: TextBlock
+                          text: "✅ Migrate as-is"
+                          weight: Bolder
+                        - type: TextBlock
+                          text: "${Topic.Summary.migrate}"
+                          size: ExtraLarge
+                          weight: Bolder
+                          color: Good
+
+                    - type: Column
+                      width: stretch
+                      items:
+                        - type: TextBlock
+                          text: "🔧 Fix & Migrate"
+                          weight: Bolder
+                        - type: TextBlock
+                          text: "${Topic.Summary.fix_migrate}"
+                          size: ExtraLarge
+                          weight: Bolder
+                          color: Warning
+
+                    - type: Column
+                      width: stretch
+                      items:
+                        - type: TextBlock
+                          text: "⚠️ Refactor"
+                          weight: Bolder
+                        - type: TextBlock
+                          text: "${Topic.Summary.major_refactor}"
+                          size: ExtraLarge
+                          weight: Bolder
+                          color: Warning
+
+                    - type: Column
+                      width: stretch
+                      style: attention
+                      items:
+                        - type: TextBlock
+                          text: "❌ Retire"
+                          weight: Bolder
+                        - type: TextBlock
+                          text: "${Topic.Summary.retire}"
+                          size: ExtraLarge
+                          weight: Bolder
+                          color: Attention
+
+                - type: FactSet
+                  spacing: Medium
+                  separator: true
+                  facts:
+                    - title: "Total datasets assessed"
+                      value: "${Topic.Summary.total}"
+                    - title: "Average readiness score"
+                      value: "${Topic.Summary.avg_score} / 100"
+                    - title: "High-risk datasets"
+                      value: "${Topic.Summary.high_risk}"
+                    - title: "Total remediation effort"
+                      value: "${Topic.Summary.total_effort_days} days"
+                    - title: "Data mode"
+                      value: "${Topic.Summary.mode}"
+
+    - kind: Question
+      variable: Topic.SummaryNext
+      prompt:
+        text: "Want to drill into a specific dataset or workspace?"
+      choices:
+        - title: "🔍 Score a dataset"
+          value: "score"
+        - title: "📋 List datasets by workspace"
+          value: "list"
+        - title: "🏠 Back to menu"
+          value: "menu"
+      choiceDisplayStyle: SuggestedAction
+
+    - kind: ConditionGroup
+      conditions:
+        - condition: =Topic.SummaryNext = "score"
+          actions:
+            - kind: BeginDialog
+              dialog: ScoreDataset
+        - condition: =Topic.SummaryNext = "list"
+          actions:
+            - kind: BeginDialog
+              dialog: ListDatasets
+      elseActions:
+        - kind: BeginDialog
+          dialog: Greeting

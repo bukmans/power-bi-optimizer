@@ -1,0 +1,88 @@
+{
+  "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+  "type": "AdaptiveCard",
+  "version": "1.5",
+  "body": [
+    {
+      "type": "TextBlock",
+      "text": "📊 Datasets in **${workspace_name}**",
+      "weight": "Bolder",
+      "size": "Medium",
+      "wrap": true
+    },
+    {
+      "type": "TextBlock",
+      "text": "${count} dataset(s) found — tap one to see the full score",
+      "isSubtle": true,
+      "spacing": "None",
+      "wrap": true
+    },
+    {
+      "type": "Container",
+      "spacing": "Medium",
+      "separator": true,
+      "$data": "${datasets}",
+      "items": [
+        {
+          "type": "ColumnSet",
+          "selectAction": {
+            "type": "Action.Submit",
+            "data": {
+              "action": "view_dataset",
+              "dataset_id": "${dataset_id}"
+            }
+          },
+          "columns": [
+            {
+              "type": "Column",
+              "width": "stretch",
+              "items": [
+                {
+                  "type": "TextBlock",
+                  "text": "${dataset_name}",
+                  "weight": "Bolder",
+                  "wrap": true
+                },
+                {
+                  "type": "TextBlock",
+                  "text": "${decision}  •  ${active_users_30d} users",
+                  "isSubtle": true,
+                  "spacing": "None",
+                  "size": "Small",
+                  "wrap": true
+                }
+              ]
+            },
+            {
+              "type": "Column",
+              "width": "auto",
+              "verticalContentAlignment": "Center",
+              "items": [
+                {
+                  "type": "TextBlock",
+                  "text": "${total_score}",
+                  "weight": "Bolder",
+                  "size": "Large",
+                  "color": "${if(total_score >= 80, 'Good', if(total_score >= 60, 'Warning', 'Attention'))}",
+                  "horizontalAlignment": "Right"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "actions": [
+    {
+      "type": "Action.Submit",
+      "title": "📥 Export CSV Report",
+      "data": { "action": "export_csv" }
+    },
+    {
+      "type": "Action.Submit",
+      "title": "🔍 Check Another Dataset",
+      "data": { "action": "search_dataset" }
+    }
+  ]
+}

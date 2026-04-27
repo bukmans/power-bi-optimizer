@@ -1,0 +1,65 @@
+kind: AdaptiveDialog
+modelDescription: |
+  Greets the analyst and presents the main menu for the Fabric Migration Advisor.
+  This is the Conversation Start topic — it fires automatically when a user opens the agent.
+
+beginDialog:
+  kind: OnConversationStart
+  actions:
+
+    - kind: SendActivity
+      activity:
+        text: |
+          👋 Hi! I'm your **Fabric Migration Advisor**.
+
+          I can help you:
+          • 📊 Check how ready any of your Power BI datasets are for Microsoft Fabric migration
+          • 🔍 See your full workspace score summary
+          • ✅ Record your migration decision (migrate, fix, or retire)
+
+          **What would you like to do?**
+
+    - kind: Question
+      id: mainMenuQuestion
+      variable: Topic.UserChoice
+      prompt:
+        text: Choose an option or just type a dataset name to get started.
+      choices:
+        - title: "📊 Score a dataset"
+          value: "score"
+        - title: "📋 List all my datasets"
+          value: "list"
+        - title: "📈 Programme summary"
+          value: "summary"
+        - title: "❓ Help"
+          value: "help"
+      choiceDisplayStyle: HeroCard
+
+    - kind: ConditionGroup
+      conditions:
+        - condition: =Topic.UserChoice = "score"
+          actions:
+            - kind: BeginDialog
+              dialog: ScoreDataset
+
+        - condition: =Topic.UserChoice = "list"
+          actions:
+            - kind: BeginDialog
+              dialog: ListDatasets
+
+        - condition: =Topic.UserChoice = "summary"
+          actions:
+            - kind: BeginDialog
+              dialog: ProgrammeSummary
+
+        - condition: =Topic.UserChoice = "help"
+          actions:
+            - kind: BeginDialog
+              dialog: Help
+
+      elseActions:
+        - kind: SendActivity
+          activity:
+            text: "I didn't catch that. Let me start over — type **score**, **list**, or **summary** to continue."
+        - kind: BeginDialog
+          dialog: Greeting

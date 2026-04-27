@@ -1,0 +1,95 @@
+kind: AdaptiveDialog
+modelDescription: |
+  Lists all datasets for a workspace chosen by the analyst.
+  Fetches the workspace list first, lets the analyst pick, then shows
+  the dataset list card. From there the analyst can tap any dataset
+  to drill into the score card.
+
+triggerQueries:
+  - list my datasets
+  - show all datasets
+  - what datasets do I have
+  - show workspace
+  - list everything
+  - all datasets
+  - view all
+
+beginDialog:
+  kind: OnRecognizedIntent
+  actions:
+
+    # ── Step 1: Get workspace list ────────────────────────────────────────────
+    - kind: InvokeConnectorAction
+      id: getWorkspaces
+      connectorId: pbi-migration-optimizer
+      operationId: GetWorkspaces
+      output:
+        binding: Topic.Workspaces
+
+    - kind: ConditionGroup
+      conditions:
+        - condition: =IsEmpty(Topic.Workspaces)
+          actions:
+            - kind: SendActivity
+              activity:
+                text: |
+                  I couldn't find any workspaces. This usually means:
+                  • The platform hasn't been connected to Power BI yet
+                  • Contact your Analytics Platform team to run the initial scan.
+            - kind: BeginDialog
+              dialog: Greeting
+
+      elseActions:
+
+        # ── Step 2: Let analyst choose a workspace ────────────────────────────
+        - kind: Question
+          id: pickWorkspace
+          variable: Topic.SelectedWorkspace
+          prompt:
+            text: "Which workspace would you like to review?"
+          choices:
+            dynamicChoices:
+              source: =Topic.Workspaces
+              displayProperty: workspace_name
+              valueProperty: workspace_name
+
+        # ── Step 3: Fetch datasets for that workspace ─────────────────────────
+        - kind: InvokeConnectorAction
+          id: getDatasetsForWorkspace
+          connectorId: pbi-migration-optimizer
+          operationId: GetDatasets
+          parameters:
+            workspace: =Topic.SelectedWorkspace
+          output:
+            binding: Topic.WorkspaceDatasets
+
+        # ── Step 4: Send the dataset list card ───────────────────────────────
+        - kind: SendActivity
+          activity:
+            text: "Here are the datasets in **${Topic.SelectedWorkspace}**:"
+            attachments:
+              - contentType: application/vnd.microsoft.card.adaptive
+                # Paste adaptive-cards/dataset-list-card.json here
+                # Bind: workspace_name → Topic.SelectedWorkspace
+                #        datasets      → Topic.WorkspaceDatasets
+                #        count         → CountItems(Topic.WorkspaceDatasets)
+                content: "@{Topic.WorkspaceDatasets}"
+
+        # ── Step 5: Wait for dataset selection ───────────────────────────────
+        - kind: Question
+          id: waitForDatasetTap
+          variable: Topic.PickedDatasetId
+          prompt:
+            text: "Tap any dataset above to see its full score, or type a dataset name."
+
+        - kind: InvokeConnectorAction
+          id: getPickedDataset
+          connectorId: pbi-migration-optimizer
+          operationId: GetDataset
+          parameters:
+            dataset_id: =Topic.PickedDatasetId
+          output:
+            binding: Topic.SelectedDataset
+
+        - kind: BeginDialog
+          dialog: ShowScoreCard

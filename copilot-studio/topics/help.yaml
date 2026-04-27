@@ -1,0 +1,112 @@
+kind: AdaptiveDialog
+modelDescription: |
+  Help topic — explains what the agent can do and how to use it.
+
+triggerQueries:
+  - help
+  - what can you do
+  - how does this work
+  - what is this
+  - instructions
+  - how do I use this
+  - guide
+
+beginDialog:
+  kind: OnRecognizedIntent
+  actions:
+
+    - kind: SendActivity
+      activity:
+        attachments:
+          - contentType: application/vnd.microsoft.card.adaptive
+            content:
+              type: AdaptiveCard
+              version: "1.5"
+              body:
+                - type: TextBlock
+                  text: "❓ Fabric Migration Advisor — Help"
+                  weight: Bolder
+                  size: Large
+
+                - type: TextBlock
+                  text: "I help your team assess which Power BI datasets are ready to migrate to Microsoft Fabric — and which need work first."
+                  wrap: true
+                  spacing: Medium
+
+                - type: TextBlock
+                  text: "**What I can do:**"
+                  weight: Bolder
+                  spacing: Medium
+
+                - type: FactSet
+                  facts:
+                    - title: "📊 Score a dataset"
+                      value: "Type a dataset name and I'll show you its Migration Readiness Score (0–100) across 5 dimensions."
+                    - title: "📋 List datasets"
+                      value: "Browse all datasets in a workspace with their scores and decisions."
+                    - title: "📈 Programme summary"
+                      value: "Get counts of how many datasets are ready, need fixes, or should be retired."
+                    - title: "✅ Record your decision"
+                      value: "After reviewing the score, tap Migrate / Fix / Retire to record your decision."
+
+                - type: TextBlock
+                  text: "**Scoring dimensions:**"
+                  weight: Bolder
+                  spacing: Medium
+
+                - type: FactSet
+                  facts:
+                    - title: "🏗 Model Health (25pts)"
+                      value: "BPA violations, bad relationships, high cardinality"
+                    - title: "⚡ Query Performance (25pts)"
+                      value: "Query duration, iterator measures, slow visuals"
+                    - title: "🔄 Refresh Efficiency (20pts)"
+                      value: "Failure rate, refresh duration, incremental refresh"
+                    - title: "👥 Usage & Business Value (20pts)"
+                      value: "Active users, certification, connected reports"
+                    - title: "📦 Size & Complexity (10pts)"
+                      value: "Model size, table count, column count"
+
+                - type: TextBlock
+                  text: "**Decision thresholds:**"
+                  weight: Bolder
+                  spacing: Medium
+
+                - type: FactSet
+                  facts:
+                    - title: "80–100 ✅"
+                      value: "Migrate as-is"
+                    - title: "60–79 🔧"
+                      value: "Fix then migrate"
+                    - title: "40–59 ⚠️"
+                      value: "Major refactor needed"
+                    - title: "0–39 ❌"
+                      value: "Consider decommission"
+
+    - kind: Question
+      variable: Topic.HelpNext
+      prompt:
+        text: "Ready to get started?"
+      choices:
+        - title: "📊 Score a dataset"
+          value: "score"
+        - title: "📋 List all datasets"
+          value: "list"
+        - title: "📈 Programme summary"
+          value: "summary"
+      choiceDisplayStyle: SuggestedAction
+
+    - kind: ConditionGroup
+      conditions:
+        - condition: =Topic.HelpNext = "score"
+          actions:
+            - kind: BeginDialog
+              dialog: ScoreDataset
+        - condition: =Topic.HelpNext = "list"
+          actions:
+            - kind: BeginDialog
+              dialog: ListDatasets
+        - condition: =Topic.HelpNext = "summary"
+          actions:
+            - kind: BeginDialog
+              dialog: ProgrammeSummary
