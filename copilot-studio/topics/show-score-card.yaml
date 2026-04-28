@@ -1,0 +1,166 @@
+kind: AdaptiveDialog
+modelDescription: |
+  Displays the Migration Readiness Score Adaptive Card for a selected dataset
+  and handles the analyst's decision (migrate / fix / retire).
+  Called by ScoreDataset and ListDatasets after a dataset is selected.
+
+beginDialog:
+  kind: OnBeginDialog
+  actions:
+
+    # ── Send the score card ───────────────────────────────────────────────────
+    - kind: SendActivity
+      activity:
+        attachments:
+          - contentType: application/vnd.microsoft.card.adaptive
+            # Paste the contents of adaptive-cards/score-card.json here
+            # then replace the static placeholders with Copilot Studio variable bindings:
+            #   ${dataset_name}        → =Topic.SelectedDataset.dataset_name
+            #   ${workspace_name}      → =Topic.SelectedDataset.workspace_name
+            #   ${total_score}         → =Topic.SelectedDataset.total_score
+            #   ${decision}            → =Topic.SelectedDataset.decision
+            #   ${migration_risk}      → =Topic.SelectedDataset.migration_risk
+            #   ${estimated_effort_days} → =Topic.SelectedDataset.estimated_effort_days
+            #   ${priority_fixes}      → =Topic.SelectedDataset.priority_fixes
+            #   ${dimensions}          → =Topic.SelectedDataset.dimensions
+            #   ${owner}               → =Topic.SelectedDataset.owner
+            #   ${model_size_gb}       → =Topic.SelectedDataset.model_size_gb
+            #   ${active_users_30d}    → =Topic.SelectedDataset.active_users_30d
+            content: "@{Topic.SelectedDataset}"
+
+    # ── Wait for analyst to click a decision button ───────────────────────────
+    - kind: Question
+      id: waitForDecision
+      variable: Topic.DecisionAction
+      prompt:
+        text: |
+          Here's the full score for **${Topic.SelectedDataset.dataset_name}**.
+
+          Based on the score of **${Topic.SelectedDataset.total_score}/100**, the system recommends: **${Topic.SelectedDataset.decision}**
+
+          Do you agree? Tap a button above to record your decision, or ask me to explain any of the scores.
+      choices:
+        - title: "✅ Approve Migration"
+          value: "migrate"
+        - title: "🔧 Fix then Migrate"
+          value: "fix_migrate"
+        - title: "❌ Retire"
+          value: "retire"
+        - title: "💬 Explain the scores"
+          value: "explain"
+        - title: "🔍 Check another dataset"
+          value: "another"
+      choiceDisplayStyle: SuggestedAction
+
+    # ── Handle decision choice ────────────────────────────────────────────────
+    - kind: ConditionGroup
+      conditions:
+
+        - condition: =Topic.DecisionAction = "explain"
+          actions:
+            - kind: SendActivity
+              activity:
+                text: |
+                  **Score explanation for ${Topic.SelectedDataset.dataset_name}:**
+
+                  🏗 **Model Health (${Topic.SelectedDataset.dimensions[0].score}/${Topic.SelectedDataset.dimensions[0].max_score})**
+                  ${Join(Topic.SelectedDataset.dimensions[0].issues, char(10))}
+
+                  ⚡ **Query Performance (${Topic.SelectedDataset.dimensions[1].score}/${Topic.SelectedDataset.dimensions[1].max_score})**
+                  ${Join(Topic.SelectedDataset.dimensions[1].issues, char(10))}
+
+                  🔄 **Refresh Efficiency (${Topic.SelectedDataset.dimensions[2].score}/${Topic.SelectedDataset.dimensions[2].max_score})**
+                  ${Join(Topic.SelectedDataset.dimensions[2].issues, char(10))}
+
+                  👥 **Usage & Business Value (${Topic.SelectedDataset.dimensions[3].score}/${Topic.SelectedDataset.dimensions[3].max_score})**
+                  ${Join(Topic.SelectedDataset.dimensions[3].issues, char(10))}
+
+                  📦 **Size & Complexity (${Topic.SelectedDataset.dimensions[4].score}/${Topic.SelectedDataset.dimensions[4].max_score})**
+                  ${Join(Topic.SelectedDataset.dimensions[4].issues, char(10))}
+
+            - kind: Question
+              variable: Topic.AfterExplain
+              prompt:
+                text: "Ready to record your decision?"
+              choices:
+                - title: "✅ Migrate"
+                  value: "migrate"
+                - title: "🔧 Fix then Migrate"
+                  value: "fix_migrate"
+                - title: "❌ Retire"
+                  value: "retire"
+                - title: "⏸ Decide later"
+                  value: "later"
+              choiceDisplayStyle: SuggestedAction
+            - kind: SetVariable
+              variable: Topic.DecisionAction
+              value: =Topic.AfterExplain
+
+        - condition: =Topic.DecisionAction = "another"
+          actions:
+            - kind: BeginDialog
+              dialog: ScoreDataset
+
+      elseActions:
+
+        # ── Record the decision ───────────────────────────────────────────────
+        - kind: ConditionGroup
+          conditions:
+            - condition: =Topic.DecisionAction = "later"
+              actions:
+                - kind: SendActivity
+                  activity:
+                    text: "No problem — your decision for **${Topic.SelectedDataset.dataset_name}** hasn't been recorded yet. Come back when you're ready!"
+                - kind: BeginDialog
+                  dialog: Greeting
+
+          elseActions:
+            - kind: InvokeConnectorAction
+              id: saveDecision
+              connectorId: pbi-migration-optimizer
+              operationId: RecordDecision
+              parameters:
+                dataset_id: =Topic.SelectedDataset.dataset_id
+                body:
+                  dataset_id: =Topic.SelectedDataset.dataset_id
+                  decision: =Topic.DecisionAction
+                  notes: "Recorded via Fabric Migration Advisor Teams agent"
+              output:
+                binding: Topic.DecisionResult
+
+            - kind: SendActivity
+              activity:
+                text: |
+                  ✅ **Decision recorded!**
+
+                  **${Topic.SelectedDataset.dataset_name}** has been marked as:
+                  **${if(Topic.DecisionAction = 'migrate', '✅ Migrate as-is', if(Topic.DecisionAction = 'fix_migrate', '🔧 Fix then Migrate', '❌ Retire'))}**
+
+                  The platform team has been notified. Thank you for completing your assessment!
+
+            - kind: Question
+              variable: Topic.AfterDecision
+              prompt:
+                text: "What would you like to do next?"
+              choices:
+                - title: "📊 Check another dataset"
+                  value: "another"
+                - title: "📋 View all my datasets"
+                  value: "list"
+                - title: "🏠 Back to menu"
+                  value: "menu"
+              choiceDisplayStyle: SuggestedAction
+
+            - kind: ConditionGroup
+              conditions:
+                - condition: =Topic.AfterDecision = "another"
+                  actions:
+                    - kind: BeginDialog
+                      dialog: ScoreDataset
+                - condition: =Topic.AfterDecision = "list"
+                  actions:
+                    - kind: BeginDialog
+                      dialog: ListDatasets
+              elseActions:
+                - kind: BeginDialog
+                  dialog: Greeting

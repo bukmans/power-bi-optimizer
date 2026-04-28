@@ -1,0 +1,232 @@
+{
+  "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+  "type": "AdaptiveCard",
+  "version": "1.5",
+  "body": [
+    {
+      "type": "Container",
+      "style": "emphasis",
+      "bleed": true,
+      "items": [
+        {
+          "type": "ColumnSet",
+          "columns": [
+            {
+              "type": "Column",
+              "width": "stretch",
+              "items": [
+                {
+                  "type": "TextBlock",
+                  "text": "${dataset_name}",
+                  "weight": "Bolder",
+                  "size": "Large",
+                  "wrap": true
+                },
+                {
+                  "type": "TextBlock",
+                  "text": "📁 ${workspace_name}",
+                  "spacing": "None",
+                  "isSubtle": true,
+                  "wrap": true
+                }
+              ]
+            },
+            {
+              "type": "Column",
+              "width": "auto",
+              "items": [
+                {
+                  "type": "TextBlock",
+                  "text": "${total_score}",
+                  "size": "ExtraLarge",
+                  "weight": "Bolder",
+                  "horizontalAlignment": "Center",
+                  "color": "${if(total_score >= 80, 'Good', if(total_score >= 60, 'Warning', 'Attention'))}"
+                },
+                {
+                  "type": "TextBlock",
+                  "text": "/ 100",
+                  "isSubtle": true,
+                  "horizontalAlignment": "Center",
+                  "spacing": "None"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "Container",
+      "spacing": "Medium",
+      "items": [
+        {
+          "type": "ColumnSet",
+          "columns": [
+            {
+              "type": "Column",
+              "width": "stretch",
+              "items": [
+                {
+                  "type": "TextBlock",
+                  "text": "**Migration Decision**",
+                  "weight": "Bolder"
+                },
+                {
+                  "type": "TextBlock",
+                  "text": "${decision}",
+                  "color": "${if(decision == 'Migrate as-is', 'Good', if(decision == 'Fix then migrate', 'Warning', if(decision == 'Major refactor needed', 'Warning', 'Attention')))}",
+                  "weight": "Bolder",
+                  "wrap": true
+                }
+              ]
+            },
+            {
+              "type": "Column",
+              "width": "auto",
+              "items": [
+                {
+                  "type": "TextBlock",
+                  "text": "**Risk**",
+                  "weight": "Bolder"
+                },
+                {
+                  "type": "TextBlock",
+                  "text": "${migration_risk}",
+                  "color": "${if(migration_risk == 'Low', 'Good', if(migration_risk == 'Medium', 'Warning', 'Attention'))}",
+                  "weight": "Bolder"
+                }
+              ]
+            },
+            {
+              "type": "Column",
+              "width": "auto",
+              "items": [
+                {
+                  "type": "TextBlock",
+                  "text": "**Est. Effort**",
+                  "weight": "Bolder"
+                },
+                {
+                  "type": "TextBlock",
+                  "text": "${estimated_effort_days}d",
+                  "weight": "Bolder"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "TextBlock",
+      "text": "SCORE BREAKDOWN",
+      "weight": "Bolder",
+      "spacing": "Medium",
+      "isSubtle": true,
+      "size": "Small"
+    },
+    {
+      "type": "ColumnSet",
+      "spacing": "Small",
+      "columns": [
+        {
+          "type": "Column",
+          "width": "stretch",
+          "items": [
+            { "type": "TextBlock", "text": "🏗 Model Health", "wrap": true },
+            { "type": "TextBlock", "text": "⚡ Query Performance", "wrap": true, "spacing": "Small" },
+            { "type": "TextBlock", "text": "🔄 Refresh Efficiency", "wrap": true, "spacing": "Small" },
+            { "type": "TextBlock", "text": "👥 Usage & Business Value", "wrap": true, "spacing": "Small" },
+            { "type": "TextBlock", "text": "📦 Size & Complexity", "wrap": true, "spacing": "Small" }
+          ]
+        },
+        {
+          "type": "Column",
+          "width": "auto",
+          "items": [
+            { "type": "TextBlock", "text": "${dimensions[0].score}/${dimensions[0].max_score}", "horizontalAlignment": "Right", "weight": "Bolder", "color": "${if(dimensions[0].pct >= 80, 'Good', if(dimensions[0].pct >= 60, 'Warning', 'Attention'))}" },
+            { "type": "TextBlock", "text": "${dimensions[1].score}/${dimensions[1].max_score}", "horizontalAlignment": "Right", "weight": "Bolder", "spacing": "Small", "color": "${if(dimensions[1].pct >= 80, 'Good', if(dimensions[1].pct >= 60, 'Warning', 'Attention'))}" },
+            { "type": "TextBlock", "text": "${dimensions[2].score}/${dimensions[2].max_score}", "horizontalAlignment": "Right", "weight": "Bolder", "spacing": "Small", "color": "${if(dimensions[2].pct >= 80, 'Good', if(dimensions[2].pct >= 60, 'Warning', 'Attention'))}" },
+            { "type": "TextBlock", "text": "${dimensions[3].score}/${dimensions[3].max_score}", "horizontalAlignment": "Right", "weight": "Bolder", "spacing": "Small", "color": "${if(dimensions[3].pct >= 80, 'Good', if(dimensions[3].pct >= 60, 'Warning', 'Attention'))}" },
+            { "type": "TextBlock", "text": "${dimensions[4].score}/${dimensions[4].max_score}", "horizontalAlignment": "Right", "weight": "Bolder", "spacing": "Small", "color": "${if(dimensions[4].pct >= 80, 'Good', if(dimensions[4].pct >= 60, 'Warning', 'Attention'))}" }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "Container",
+      "spacing": "Medium",
+      "style": "attention",
+      "isVisible": "${count(priority_fixes) > 0}",
+      "items": [
+        {
+          "type": "TextBlock",
+          "text": "⚠️ TOP PRIORITY FIXES",
+          "weight": "Bolder",
+          "size": "Small"
+        },
+        {
+          "type": "TextBlock",
+          "text": "• ${priority_fixes[0]}",
+          "wrap": true,
+          "isVisible": "${count(priority_fixes) >= 1}"
+        },
+        {
+          "type": "TextBlock",
+          "text": "• ${priority_fixes[1]}",
+          "wrap": true,
+          "spacing": "None",
+          "isVisible": "${count(priority_fixes) >= 2}"
+        },
+        {
+          "type": "TextBlock",
+          "text": "• ${priority_fixes[2]}",
+          "wrap": true,
+          "spacing": "None",
+          "isVisible": "${count(priority_fixes) >= 3}"
+        }
+      ]
+    },
+    {
+      "type": "FactSet",
+      "spacing": "Medium",
+      "facts": [
+        { "title": "Owner", "value": "${owner}" },
+        { "title": "Size", "value": "${model_size_gb} GB" },
+        { "title": "Active Users (30d)", "value": "${string(active_users_30d)}" }
+      ]
+    }
+  ],
+  "actions": [
+    {
+      "type": "Action.Submit",
+      "title": "✅ Approve Migration",
+      "style": "positive",
+      "data": {
+        "action": "record_decision",
+        "dataset_id": "${dataset_id}",
+        "decision": "migrate"
+      }
+    },
+    {
+      "type": "Action.Submit",
+      "title": "🔧 Fix then Migrate",
+      "data": {
+        "action": "record_decision",
+        "dataset_id": "${dataset_id}",
+        "decision": "fix_migrate"
+      }
+    },
+    {
+      "type": "Action.Submit",
+      "title": "❌ Retire",
+      "style": "destructive",
+      "data": {
+        "action": "record_decision",
+        "dataset_id": "${dataset_id}",
+        "decision": "retire"
+      }
+    }
+  ]
+}

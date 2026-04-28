@@ -1,0 +1,50 @@
+{
+  "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+  "type": "AdaptiveCard",
+  "version": "1.5",
+  "body": [
+    {
+      "type": "Container",
+      "style": "good",
+      "items": [
+        {
+          "type": "TextBlock",
+          "text": "✅ Decision Recorded",
+          "weight": "Bolder",
+          "size": "Medium"
+        }
+      ]
+    },
+    {
+      "type": "FactSet",
+      "spacing": "Medium",
+      "facts": [
+        { "title": "Dataset", "value": "${dataset_name}" },
+        { "title": "Workspace", "value": "${workspace_name}" },
+        { "title": "Your Decision", "value": "${decision_label}" },
+        { "title": "Readiness Score", "value": "${total_score} / 100" },
+        { "title": "Recorded by", "value": "${recorded_by}" },
+        { "title": "Date", "value": "${recorded_date}" }
+      ]
+    },
+    {
+      "type": "TextBlock",
+      "text": "${next_step}",
+      "wrap": true,
+      "spacing": "Medium",
+      "isSubtle": true
+    }
+  ],
+  "actions": [
+    {
+      "type": "Action.Submit",
+      "title": "📊 Check Another Dataset",
+      "data": { "action": "search_dataset" }
+    },
+    {
+      "type": "Action.Submit",
+      "title": "📋 View All My Datasets",
+      "data": { "action": "list_my_datasets" }
+    }
+  ]
+}

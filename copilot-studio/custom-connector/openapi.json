@@ -1,0 +1,304 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "Power BI Migration Optimizer",
+    "description": "Score Power BI semantic models for Microsoft Fabric migration readiness. Used by the Fabric Migration Advisor Copilot Studio agent.",
+    "version": "1.0.0",
+    "contact": {
+      "name": "Analytics Platform Team"
+    }
+  },
+  "host": "YOUR-APP.azurecontainerapps.io",
+  "basePath": "/",
+  "schemes": ["https"],
+  "consumes": ["application/json"],
+  "produces": ["application/json"],
+  "securityDefinitions": {
+    "apiKey": {
+      "type": "apiKey",
+      "in": "header",
+      "name": "X-API-Key"
+    }
+  },
+  "security": [{ "apiKey": [] }],
+  "paths": {
+    "/api/status": {
+      "get": {
+        "summary": "Get platform status",
+        "description": "Returns whether the platform is in demo or live mode and the total number of scored datasets.",
+        "operationId": "GetStatus",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Status response",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "mode": { "type": "string", "example": "live" },
+                "dataset_count": { "type": "integer", "example": 42 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/summary": {
+      "get": {
+        "summary": "Get migration programme summary",
+        "description": "Returns aggregate counts of datasets by migration decision, average score, and workspace breakdown.",
+        "operationId": "GetSummary",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Summary statistics",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "total": { "type": "integer" },
+                "migrate": { "type": "integer" },
+                "fix_migrate": { "type": "integer" },
+                "major_refactor": { "type": "integer" },
+                "retire": { "type": "integer" },
+                "avg_score": { "type": "number" },
+                "total_effort_days": { "type": "integer" },
+                "high_risk": { "type": "integer" },
+                "mode": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workspaces": {
+      "get": {
+        "summary": "List all workspaces",
+        "description": "Returns a list of distinct Power BI workspace names and their dataset counts.",
+        "operationId": "GetWorkspaces",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "List of workspaces",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "workspace_name": { "type": "string" },
+                  "dataset_count": { "type": "integer" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/datasets/search": {
+      "get": {
+        "summary": "Search datasets by name",
+        "description": "Fuzzy search for datasets by name or workspace name. Returns up to 5 matches ranked by score. Use this when an analyst mentions a dataset name in conversation.",
+        "operationId": "SearchDatasets",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "type": "string",
+            "description": "Partial dataset or workspace name to search for",
+            "x-ms-summary": "Search term"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Matching datasets with full scores",
+            "schema": {
+              "type": "array",
+              "items": { "$ref": "#/definitions/DatasetSummary" }
+            }
+          },
+          "404": {
+            "description": "No datasets found matching the search term"
+          }
+        }
+      }
+    },
+    "/api/datasets": {
+      "get": {
+        "summary": "Get all scored datasets",
+        "description": "Returns all datasets with their migration readiness scores. Supports filtering by workspace, decision, and score range.",
+        "operationId": "GetDatasets",
+        "parameters": [
+          {
+            "name": "workspace",
+            "in": "query",
+            "required": false,
+            "type": "string",
+            "description": "Filter by workspace name (partial match)",
+            "x-ms-summary": "Workspace name"
+          },
+          {
+            "name": "decision",
+            "in": "query",
+            "required": false,
+            "type": "string",
+            "description": "Filter by migration decision",
+            "x-ms-summary": "Migration decision",
+            "enum": ["Migrate as-is", "Fix then migrate", "Major refactor", "Consider decommission"]
+          },
+          {
+            "name": "min_score",
+            "in": "query",
+            "required": false,
+            "type": "number",
+            "description": "Minimum readiness score (0-100)",
+            "x-ms-summary": "Minimum score"
+          },
+          {
+            "name": "max_score",
+            "in": "query",
+            "required": false,
+            "type": "number",
+            "description": "Maximum readiness score (0-100)",
+            "x-ms-summary": "Maximum score"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of scored datasets",
+            "schema": {
+              "type": "array",
+              "items": { "$ref": "#/definitions/DatasetSummary" }
+            }
+          }
+        }
+      }
+    },
+    "/api/datasets/{dataset_id}": {
+      "get": {
+        "summary": "Get full dataset score detail",
+        "description": "Returns the complete scoring breakdown for a single dataset, including all five dimension scores, issues, and priority fixes.",
+        "operationId": "GetDataset",
+        "parameters": [
+          {
+            "name": "dataset_id",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "description": "The unique dataset ID (GUID)",
+            "x-ms-summary": "Dataset ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Full dataset scoring detail",
+            "schema": { "$ref": "#/definitions/DatasetDetail" }
+          },
+          "404": { "description": "Dataset not found" }
+        }
+      }
+    },
+    "/api/datasets/{dataset_id}/decision": {
+      "post": {
+        "summary": "Record owner migration decision",
+        "description": "Saves the dataset owner's migration decision (migrate, fix_migrate, or retire). Call this when the analyst confirms their decision in conversation.",
+        "operationId": "RecordDecision",
+        "parameters": [
+          {
+            "name": "dataset_id",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "description": "The unique dataset ID (GUID)",
+            "x-ms-summary": "Dataset ID"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "required": ["dataset_id", "decision"],
+              "properties": {
+                "dataset_id": {
+                  "type": "string",
+                  "description": "The dataset ID",
+                  "x-ms-summary": "Dataset ID"
+                },
+                "decision": {
+                  "type": "string",
+                  "description": "Owner's migration decision",
+                  "x-ms-summary": "Decision",
+                  "enum": ["migrate", "fix_migrate", "retire"]
+                },
+                "notes": {
+                  "type": "string",
+                  "description": "Optional notes from the owner",
+                  "x-ms-summary": "Notes"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Decision saved successfully",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "status": { "type": "string" },
+                "dataset_id": { "type": "string" },
+                "decision": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "DatasetSummary": {
+      "type": "object",
+      "properties": {
+        "dataset_id": { "type": "string" },
+        "dataset_name": { "type": "string" },
+        "workspace_name": { "type": "string" },
+        "owner": { "type": "string" },
+        "total_score": { "type": "number" },
+        "decision": { "type": "string" },
+        "decision_color": { "type": "string" },
+        "migration_risk": { "type": "string" },
+        "estimated_effort_days": { "type": "integer" },
+        "model_size_gb": { "type": "number" },
+        "active_users_30d": { "type": "integer" },
+        "owner_decision": { "type": "string" },
+        "priority_fixes": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "DatasetDetail": {
+      "allOf": [
+        { "$ref": "#/definitions/DatasetSummary" },
+        {
+          "type": "object",
+          "properties": {
+            "dimensions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string" },
+                  "score": { "type": "number" },
+                  "max_score": { "type": "integer" },
+                  "pct": { "type": "number" },
+                  "issues": { "type": "array", "items": { "type": "string" } },
+                  "recommendations": { "type": "array", "items": { "type": "string" } }
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

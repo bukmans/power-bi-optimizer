@@ -1,0 +1,125 @@
+kind: AdaptiveDialog
+modelDescription: |
+  Main topic. Asks the analyst for a dataset name, searches for it via the custom connector,
+  displays the Migration Readiness Score as an Adaptive Card, and captures the owner's
+  migration decision. This is the core flow analysts will use most often.
+
+triggerQueries:
+  - score my dataset
+  - check migration readiness
+  - how ready is my model
+  - assess my dataset
+  - score
+  - check my dataset
+  - is my report ready for fabric
+  - migration score
+  - readiness check
+
+beginDialog:
+  kind: OnRecognizedIntent
+  actions:
+
+    # ── Step 1: Ask for dataset name ──────────────────────────────────────────
+    - kind: Question
+      id: askDatasetName
+      variable: Topic.DatasetSearchTerm
+      prompt:
+        text: |
+          Sure! What's the name of the dataset or workspace you want to check?
+          (You can type part of the name — I'll find it for you)
+      validations:
+        - condition: =Not(IsBlank(Topic.DatasetSearchTerm))
+          message: "Please enter at least part of the dataset name."
+
+    # ── Step 2: Call the search API ───────────────────────────────────────────
+    - kind: InvokeConnectorAction
+      id: searchForDataset
+      connectorId: pbi-migration-optimizer         # Set this to your connector ID after import
+      operationId: SearchDatasets
+      parameters:
+        q: =Topic.DatasetSearchTerm
+      output:
+        binding: Topic.SearchResults
+
+    # ── Step 3: Handle no results ─────────────────────────────────────────────
+    - kind: ConditionGroup
+      conditions:
+        - condition: =IsEmpty(Topic.SearchResults)
+          actions:
+            - kind: SendActivity
+              activity:
+                text: |
+                  I couldn't find any datasets matching **"${Topic.DatasetSearchTerm}"**.
+
+                  This could mean:
+                  • The dataset name is spelled differently
+                  • It's in a workspace you don't have access to
+                  • The platform hasn't scanned that workspace yet
+
+                  Want to try a different name?
+            - kind: Question
+              variable: Topic.RetryChoice
+              prompt:
+                text: " "
+              choices:
+                - title: "🔁 Try again"
+                  value: "retry"
+                - title: "📋 List all datasets"
+                  value: "list"
+                - title: "🏠 Back to menu"
+                  value: "menu"
+              choiceDisplayStyle: SuggestedAction
+            - kind: ConditionGroup
+              conditions:
+                - condition: =Topic.RetryChoice = "retry"
+                  actions:
+                    - kind: BeginDialog
+                      dialog: ScoreDataset
+                - condition: =Topic.RetryChoice = "list"
+                  actions:
+                    - kind: BeginDialog
+                      dialog: ListDatasets
+              elseActions:
+                - kind: BeginDialog
+                  dialog: Greeting
+
+      # ── Step 4: Single result — go straight to score card ─────────────────
+        - condition: =CountItems(Topic.SearchResults) = 1
+          actions:
+            - kind: SetVariable
+              variable: Topic.SelectedDataset
+              value: =First(Topic.SearchResults)
+            - kind: BeginDialog
+              dialog: ShowScoreCard
+
+      # ── Step 5: Multiple results — let analyst choose ─────────────────────
+      elseActions:
+        - kind: SendActivity
+          activity:
+            text: "I found ${CountItems(Topic.SearchResults)} datasets matching that name. Which one did you mean?"
+
+        - kind: Question
+          id: pickDataset
+          variable: Topic.SelectedDatasetId
+          prompt:
+            text: " "
+          choices:
+            # Copilot Studio will render these dynamically from the search results
+            # Configure this as a dynamic choices list bound to Topic.SearchResults
+            # mapping: title = dataset_name + " (" + workspace_name + ")", value = dataset_id
+            dynamicChoices:
+              source: =Topic.SearchResults
+              displayProperty: dataset_name
+              valueProperty: dataset_id
+
+        - kind: InvokeConnectorAction
+          id: getFullDataset
+          connectorId: pbi-migration-optimizer
+          operationId: GetDataset
+          parameters:
+            dataset_id: =Topic.SelectedDatasetId
+          output:
+            binding: Topic.SelectedDataset
+
+        - kind: BeginDialog
+          dialog: ShowScoreCard
