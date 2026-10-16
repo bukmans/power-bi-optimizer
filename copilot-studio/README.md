@@ -252,7 +252,7 @@ copilot-studio/
 
 | Problem | Fix |
 |---|---|
-| Connector returns 403 | Check `OPTIMIZER_API_KEY` env var on the backend matches the key in the Power Platform connection |
+| Connector returns 401 | Check `OPTIMIZER_API_KEY` env var on the backend matches the key in the Power Platform connection |
 | Connector returns 404 on search | The backend is running in demo mode — connect it to Power BI first via the web dashboard |
 | Adaptive Card doesn't render | Verify the JSON is valid at [adaptivecards.io/designer](https://adaptivecards.io/designer) |
 | Agent not appearing in Teams | Re-publish the agent and wait 5 minutes for Teams to sync |

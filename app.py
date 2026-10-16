@@ -8,6 +8,8 @@ import copy
 import json
 import os
 import secrets
+import sys
+from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
@@ -23,33 +25,68 @@ from engine.scorer import score_dataset, DatasetInput, MigrationDecision
 from engine.demo_data import DEMO_DATASETS
 from engine.pbi_client import PBIClient
 
+# ── API Key auth — used by the dashboard and the Copilot Studio custom connector ─
+# Fails closed: every /api route needs X-API-Key unless auth is explicitly disabled
+# (OPTIMIZER_AUTH_DISABLED=true – only for a local, loopback-only run).
+_PLACEHOLDER_KEYS = {"", "demo-key-change-in-production", "change-me"}
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+
+def _configured_api_key() -> Optional[str]:
+    key = os.getenv("OPTIMIZER_API_KEY", "").strip()
+    return None if key in _PLACEHOLDER_KEYS else key
+
+
+def _auth_disabled() -> bool:
+    return os.getenv("OPTIMIZER_AUTH_DISABLED", "").strip().lower() in ("1", "true", "yes")
+
+
+def check_auth_config() -> None:
+    """Refuse to start without a real API key, unless auth was explicitly disabled."""
+    if not _auth_disabled() and _configured_api_key() is None:
+        raise RuntimeError(
+            "OPTIMIZER_API_KEY is not set (or is a placeholder). Set a strong random key, "
+            "e.g. python -c \"import secrets; print(secrets.token_urlsafe(32))\". "
+            "For a local-only run, use `python app.py`, which binds to 127.0.0.1."
+        )
+
+
+def require_api_key(key: Optional[str] = Security(api_key_header)):
+    if _auth_disabled():
+        return
+    expected = _configured_api_key()
+    if expected is None:
+        raise HTTPException(status_code=503, detail="Server API key is not configured")
+    if not key or not secrets.compare_digest(key.encode(), expected.encode()):
+        raise HTTPException(status_code=401, detail="Invalid or missing API key",
+                            headers={"WWW-Authenticate": "ApiKey"})
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    check_auth_config()
+    yield
+
+
 app = FastAPI(
     title="Power BI Migration Optimizer",
     version="1.0.0",
     description="Score Power BI semantic models for Microsoft Fabric migration readiness.",
+    lifespan=_lifespan,
 )
 
 # ── CORS — required for Copilot Studio custom connector ───────────────────────
+# Auth is a header, not a cookie, so credentials are not needed. Wildcard
+# subdomains must go in allow_origin_regex; allow_origins only matches exactly.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["https://make.powerautomate.com", "https://copilotstudio.microsoft.com",
-                   "https://*.azure-apim.net", "http://localhost:8000"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+                   "http://localhost:8000", "http://127.0.0.1:8000"],
+    allow_origin_regex=r"https://[a-z0-9-]+\.azure-apim\.net",
+    allow_credentials=False,
+    allow_methods=["GET", "POST"],
+    allow_headers=["X-API-Key", "Content-Type"],
 )
-
-# ── API Key auth — used by the Copilot Studio custom connector ─────────────────
-API_KEY = os.getenv("OPTIMIZER_API_KEY", "demo-key-change-in-production")
-api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
-
-
-def require_api_key(key: str = Security(api_key_header)):
-    """Allow open access in demo mode; require key in live/production."""
-    if API_KEY == "demo-key-change-in-production":
-        return  # demo mode — no auth required
-    if key != API_KEY:
-        raise HTTPException(status_code=403, detail="Invalid or missing API key")
 
 # ── In-memory state ────────────────────────────────────────────────────────────
 _dataset_cache: dict[str, DatasetInput] = {}
@@ -250,7 +287,7 @@ def get_summary():
     }
 
 
-@app.post("/api/connect")
+@app.post("/api/connect", dependencies=[Depends(require_api_key)])
 async def connect_to_pbi(config: ConnectionConfig):
     """Connect to Power BI REST API and load real datasets."""
     global _dataset_cache, _mode
@@ -272,7 +309,7 @@ async def connect_to_pbi(config: ConnectionConfig):
     return {"status": "connected", "dataset_count": len(_dataset_cache)}
 
 
-@app.post("/api/reset-demo")
+@app.post("/api/reset-demo", dependencies=[Depends(require_api_key)])
 def reset_demo():
     """Switch back to demo mode."""
     _load_demo()
@@ -314,7 +351,7 @@ def get_workspaces():
     return [{"workspace_name": w, "dataset_count": sum(1 for r in results if r["workspace_name"] == w)} for w in ws]
 
 
-@app.get("/api/export/csv")
+@app.get("/api/export/csv", dependencies=[Depends(require_api_key)])
 def export_csv():
     """Export all scored datasets as CSV."""
     import csv
@@ -358,6 +395,12 @@ def export_csv():
 
 
 # ── Frontend ──────────────────────────────────────────────────────────────────
+@app.get("/healthz")
+def healthz():
+    """Unauthenticated liveness probe for Docker / Container Apps. Returns no data."""
+    return {"status": "ok"}
+
+
 @app.get("/", response_class=HTMLResponse)
 def serve_frontend():
     html_path = Path(__file__).parent / "static" / "index.html"
@@ -367,8 +410,17 @@ def serve_frontend():
 # ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
+    host = os.getenv("HOST", "127.0.0.1")
+    port = int(os.getenv("PORT", "8000"))
+    if _configured_api_key() is None and not _auth_disabled():
+        if host not in ("127.0.0.1", "localhost", "::1"):
+            sys.exit(f"Refusing to listen on {host} without OPTIMIZER_API_KEY. "
+                     "Set the key, or run on 127.0.0.1 for local use.")
+        # Local, loopback-only convenience run: no key needed
+        os.environ["OPTIMIZER_AUTH_DISABLED"] = "true"
+        print("  ! No OPTIMIZER_API_KEY set: API auth disabled (listening on localhost only)")
     print("\n" + "=" * 60)
     print("  Power BI Migration Optimizer")
-    print("  Open your browser: http://localhost:8000")
+    print(f"  Open your browser: http://{host}:{port}")
     print("=" * 60 + "\n")
-    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("app:app", host=host, port=port, reload=True)

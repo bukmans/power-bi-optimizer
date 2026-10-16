@@ -141,6 +141,11 @@ python app.py
 
 Open your browser at **http://localhost:8000**
 
+`python app.py` listens on localhost only and, if `OPTIMIZER_API_KEY` is not set, runs without
+API authentication. Any other way of running it (Docker, `uvicorn`, a non-localhost `HOST`)
+requires `OPTIMIZER_API_KEY`; the dashboard then asks for the key once per browser tab and sends
+it as the `X-API-Key` header.
+
 The platform launches immediately with **10 realistic demo datasets** across 8 workspaces, covering all four migration decisions.
 
 ---
@@ -420,6 +425,10 @@ This platform supports the three-phase migration approach:
 
 ## Security
 
+- **Every `/api` endpoint requires the `X-API-Key` header** (including connect, reset and CSV
+  export). The app refuses to start without `OPTIMIZER_API_KEY`, except `python app.py` on
+  localhost. Keys are compared in constant time; missing/invalid keys get `401`.
+- `/healthz` is the only unauthenticated endpoint besides the dashboard page; it returns no data.
 - The platform uses a **service principal with least-privilege** access (`Dataset.Read.All`, `Workspace.Read.All`)
 - Credentials are stored only in your `.env` file — never committed to source control (`.gitignore` excludes it)
 - No data leaves your environment — all scoring happens locally

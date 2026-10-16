@@ -54,7 +54,9 @@ jobs:
             PBI_TENANT_ID=secretref:pbi-tenant-id
             PBI_CLIENT_ID=secretref:pbi-client-id
             PBI_CLIENT_SECRET=secretref:pbi-client-secret
+            OPTIMIZER_API_KEY=secretref:optimizer-api-key
         env:
           AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
           # Secrets passed as Container Apps secrets (set via azure-setup.sh or portal)
-          # PBI_TENANT_ID, PBI_CLIENT_ID, PBI_CLIENT_SECRET are stored in the Container App
+          # PBI_TENANT_ID, PBI_CLIENT_ID, PBI_CLIENT_SECRET and OPTIMIZER_API_KEY are stored in the
+          # Container App as secrets. The app refuses to start without OPTIMIZER_API_KEY.

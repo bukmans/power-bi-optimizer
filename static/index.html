@@ -59,9 +59,9 @@
       <button onclick="openConnectModal()" class="text-sm bg-white text-fabric px-3 py-1.5 rounded-md font-medium hover:bg-blue-50 transition">
         Connect to Power BI
       </button>
-      <a href="/api/export/csv" class="text-sm border border-white/40 px-3 py-1.5 rounded-md hover:bg-blue-700 transition">
+      <button onclick="exportCsv()" class="text-sm border border-white/40 px-3 py-1.5 rounded-md hover:bg-blue-700 transition">
         Export CSV
-      </a>
+      </button>
     </div>
   </div>
 </nav>
@@ -188,22 +188,73 @@ let sortField = 'total_score';
 let sortDir = -1; // -1 = desc
 
 // ── Boot ─────────────────────────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', () => {
-  loadSummary();
-  loadDatasets();
+document.addEventListener('DOMContentLoaded', async () => {
+  // Sequential so a missing key prompts once, not once per request
+  if (await loadSummary()) await loadDatasets();
 });
+
+function showApiError(res) {
+  const msg = res.status === 401
+    ? 'An API key is required. <a href="" class="underline">Reload</a> to enter it.'
+    : `Could not load data (HTTP ${res.status}).`;
+  document.getElementById('summary-cards').innerHTML =
+    `<div class="col-span-2 md:col-span-4 lg:col-span-8 text-center text-sm text-red-700 bg-red-50 border border-red-200 rounded-xl py-6">${msg}</div>`;
+  document.getElementById('dataset-table-body').innerHTML = '';
+}
+
+// ── API access ────────────────────────────────────────────────────────────────
+// Every /api call needs the X-API-Key header. The key is asked for once and kept
+// for this browser tab only (sessionStorage), never in the page source.
+const KEY_STORE = 'optimizer-api-key';
+
+function getApiKey() {
+  try { return sessionStorage.getItem(KEY_STORE) || ''; } catch { return ''; }
+}
+
+function setApiKey(key) {
+  try { key ? sessionStorage.setItem(KEY_STORE, key) : sessionStorage.removeItem(KEY_STORE); } catch {}
+}
+
+async function apiFetch(url, options = {}) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const headers = {...(options.headers || {})};
+    const key = getApiKey();
+    if (key) headers['X-API-Key'] = key;
+    const res = await fetch(url, {...options, headers});
+    if (res.status !== 401) return res;
+    setApiKey('');
+    const entered = window.prompt(attempt === 0
+      ? 'Enter the Migration Optimizer API key:'
+      : 'That key was not accepted. Enter the API key:');
+    if (!entered) return res;
+    setApiKey(entered.trim());
+  }
+  throw new Error('API key not accepted');
+}
+
+async function exportCsv() {
+  const res = await apiFetch('/api/export/csv');
+  if (!res.ok) { alert('Export failed (' + res.status + ')'); return; }
+  const url = URL.createObjectURL(await res.blob());
+  const a = Object.assign(document.createElement('a'), {href: url, download: 'migration_readiness_report.csv'});
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
 
 // ── Data fetching ─────────────────────────────────────────────────────────────
 async function loadSummary() {
-  const res = await fetch('/api/summary');
+  const res = await apiFetch('/api/summary');
+  if (!res.ok) { showApiError(res); return false; }
   const s = await res.json();
   renderSummaryCards(s);
   document.getElementById('mode-badge').textContent =
     s.mode === 'live' ? 'Live – Power BI' : 'Demo Mode';
+  return true;
 }
 
 async function loadDatasets() {
-  const res = await fetch('/api/datasets');
+  const res = await apiFetch('/api/datasets');
+  if (!res.ok) { showApiError(res); return; }
   allDatasets = await res.json();
 
   // Populate workspace filter
@@ -399,7 +450,7 @@ async function openDetail(datasetId) {
     <div class="flex justify-center py-12"><div class="spinner"></div></div>`;
   document.body.style.overflow = 'hidden';
 
-  const res = await fetch(`/api/datasets/${datasetId}`);
+  const res = await apiFetch(`/api/datasets/${datasetId}`);
   const d = await res.json();
   renderDetailModal(d);
 }
@@ -513,7 +564,7 @@ function renderDetailModal(d) {
 
 async function saveOwnerDecision(datasetId) {
   const val = document.getElementById('owner-decision-sel').value;
-  await fetch(`/api/datasets/${datasetId}/decision`, {
+  await apiFetch(`/api/datasets/${datasetId}/decision`, {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
     body: JSON.stringify({dataset_id: datasetId, decision: val}),
@@ -556,7 +607,7 @@ async function connectToPBI() {
   };
 
   try {
-    const res = await fetch('/api/connect', {
+    const res = await apiFetch('/api/connect', {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
       body: JSON.stringify(body),
@@ -576,7 +627,7 @@ async function connectToPBI() {
 }
 
 async function resetDemo() {
-  await fetch('/api/reset-demo', {method:'POST'});
+  await apiFetch('/api/reset-demo', {method:'POST'});
   closeConnectModal();
   await loadSummary();
   await loadDatasets();

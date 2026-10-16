@@ -16,6 +16,9 @@ docker compose up --build
 
 Open your browser at **http://localhost:8000**.
 
+The container needs an API key: copy `.env.example` to `.env` and set `OPTIMIZER_API_KEY`
+(the container refuses to start without one). The dashboard asks for the key once per browser tab.
+
 ---
 
 ## Option B — Team Shared Server
@@ -72,6 +75,12 @@ Go to your repo → **Settings → Secrets and variables → Actions → New rep
 | `PBI_TENANT_ID` | Azure portal → Microsoft Entra ID → Overview → Tenant ID |
 | `PBI_CLIENT_ID` | Azure portal → App registrations → your app → Application (client) ID |
 | `PBI_CLIENT_SECRET` | Azure portal → App registrations → your app → Certificates & secrets |
+
+Then set the API key as a Container App secret (the app refuses to start without it):
+
+```bash
+az containerapp secret set --name power-bi-optimizer --resource-group rg-pbi-optimizer   --secrets optimizer-api-key=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
+```
 
 ### Step 3 — Deploy
 

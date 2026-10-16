@@ -66,7 +66,28 @@ Fixes from the October 2026 code review. Each entry links to the tests that cove
 - Usage now counts as measured only when `active_users_30d` is known; a last-used date alone no
   longer produces a usage score that reads the missing user count as zero users.
 
+### Security
+- **The deployed app ran with no authentication.** `require_api_key` skipped the check whenever
+  `OPTIMIZER_API_KEY` was unset or still the placeholder, and the deploy workflow never set it –
+  with external ingress. Auth now fails closed: missing/placeholder key → the app refuses to start
+  (and any request gets 503); invalid key → 401 (was 403). Keys are compared with
+  `secrets.compare_digest`. (`tests/test_auth.py`)
+- **`/api/connect`, `/api/reset-demo` and `/api/export/csv` had no auth at all**, so anyone could
+  download the full inventory or repoint the app at another tenant. All `/api/*` routes are now
+  protected, and a test enumerates every `/api` route so new ones can't ship unprotected.
+- `python app.py` now binds to `127.0.0.1` by default (was `0.0.0.0`); with no key it runs
+  without auth on localhost only, and refuses to start on any other `HOST` without a key.
+- CORS: `https://*.azure-apim.net` never matched (wildcards aren't supported in `allow_origins`);
+  now `allow_origin_regex`. `allow_credentials` turned off (auth is a header, not a cookie);
+  methods and headers narrowed to what the API uses.
+- Deploy workflow passes `OPTIMIZER_API_KEY` from the `optimizer-api-key` Container App secret;
+  setup script and `deploy/README.md` explain how to set it; `.env.example` includes it.
+
 ### Added
+- `GET /healthz` – unauthenticated liveness probe returning no data. The docker-compose
+  healthcheck used `/api/status`, which now needs a key.
+- Dashboard asks for the API key once per tab (kept in `sessionStorage`), sends it on every call,
+  downloads the CSV through an authenticated request, and shows a clear message if no key is given.
 - Decision **"Needs assessment"** (grey), issued when Model Health or Usage is not measured,
   with risk `Unknown` and no effort estimate. Each unmeasured dimension says how to collect it.
 - API fields `data_coverage_pct`, `unmeasured_dimensions` and per-dimension `measured`;
