@@ -10,6 +10,9 @@ Fixes from the October 2026 code review. Each entry links to the tests that cove
 
 ### Added
 - Test suite under `tests/` and `requirements-dev.txt`.
+- **CI runs the tests before deploying.** The workflow previously built and deployed every push to
+  `main` untested. A `test` job (Python 3.12, as in the Dockerfile) now gates build and deploy,
+  and pull requests run the tests without deploying.
 
 ### Fixed
 - **Search endpoint always returned 404.** `GET /api/datasets/search` was declared after
