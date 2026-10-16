@@ -79,3 +79,16 @@ def test_api_exposes_coverage_and_summary_count(client):
     assert all(dim["measured"] for dim in d["dimensions"])
     s = client.get("/api/summary").json()
     assert s["needs_assessment"] == 0
+
+
+def test_unknown_report_count_does_not_flag_no_reports():
+    r = score_dataset(DatasetInput(dataset_id="x", usage=UsageInput(active_users_30d=10)))
+    usage = _dim(r, "Usage & Business Value")
+    assert not any("No reports" in i for i in usage.issues)
+    r = score_dataset(DatasetInput(dataset_id="x", usage=UsageInput(active_users_30d=10, report_count=0)))
+    assert any("No reports" in i for i in _dim(r, "Usage & Business Value").issues)
+
+
+def test_last_used_alone_does_not_count_as_measured_usage():
+    r = score_dataset(DatasetInput(dataset_id="x", usage=UsageInput(days_since_last_used=3)))
+    assert not _dim(r, "Usage & Business Value").measured

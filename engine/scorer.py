@@ -92,6 +92,9 @@ class DimensionScore:
     issues: list[str] = field(default_factory=list)
     recommendations: list[str] = field(default_factory=list)
     measured: bool = True
+    # Points lost that each recommendation addresses, aligned with `recommendations`;
+    # None marks an informational note that is not a fix. Used to rank priority_fixes.
+    rec_points: list[Optional[float]] = field(default_factory=list)
 
 
 @dataclass
@@ -129,6 +132,11 @@ def _filled(inp):
     })
 
 
+def _recommend(recommendations: list[str], points: list, lost: Optional[float], text: str) -> None:
+    recommendations.append(text)
+    points.append(lost)
+
+
 def _clamp(value: float, min_val: float = 0.0, max_val: float = None) -> float:
     if max_val is not None:
         return max(min_val, min(max_val, value))
@@ -142,53 +150,54 @@ def score_model_health(inp: ModelHealthInput) -> DimensionScore:
     score = MAX
     issues = []
     recommendations = []
+    points = []  # points lost per recommendation (None = informational)
 
     # BPA critical violations (-3 each, max -12)
     critical_penalty = min(inp.bpa_critical_count * 3, 12)
     if inp.bpa_critical_count > 0:
         score -= critical_penalty
         issues.append(f"{inp.bpa_critical_count} critical BPA rule violation(s)")
-        recommendations.append("Resolve critical BPA violations before migration (use Tabular Editor BPA)")
+        _recommend(recommendations, points, critical_penalty, "Resolve critical BPA violations before migration (use Tabular Editor BPA)")
 
     # BPA warnings (-1 each, max -5)
     warning_penalty = min(inp.bpa_warning_count * 1, 5)
     if inp.bpa_warning_count > 0:
         score -= warning_penalty
         issues.append(f"{inp.bpa_warning_count} BPA warning violation(s)")
-        recommendations.append("Address BPA warnings to improve model health score")
+        _recommend(recommendations, points, warning_penalty, "Address BPA warnings to improve model health score")
 
     # Bidirectional relationships (-2 each, max -6)
     bidir_penalty = min(inp.bidirectional_rel_count * 2, 6)
     if inp.bidirectional_rel_count > 0:
         score -= bidir_penalty
         issues.append(f"{inp.bidirectional_rel_count} bidirectional relationship(s) – high Fabric performance risk")
-        recommendations.append("Replace bidirectional relationships with single-direction + USERELATIONSHIP in DAX")
+        _recommend(recommendations, points, bidir_penalty, "Replace bidirectional relationships with single-direction + USERELATIONSHIP in DAX")
 
     # Many-to-many (-3 each, max -6)
     m2m_penalty = min(inp.many_to_many_rel_count * 3, 6)
     if inp.many_to_many_rel_count > 0:
         score -= m2m_penalty
         issues.append(f"{inp.many_to_many_rel_count} many-to-many relationship(s) – causes CrossFilter overhead at Fabric scale")
-        recommendations.append("Resolve M:M relationships by introducing bridge tables or restructuring the model")
+        _recommend(recommendations, points, m2m_penalty, "Resolve M:M relationships by introducing bridge tables or restructuring the model")
 
     # High cardinality (-2 each, max -4)
     card_penalty = min(inp.high_cardinality_columns * 2, 4)
     if inp.high_cardinality_columns > 0:
         score -= card_penalty
         issues.append(f"{inp.high_cardinality_columns} high-cardinality column(s) (>1M unique values)")
-        recommendations.append("Consider hashing, bucketing, or removing high-cardinality columns not used in filters/visuals")
+        _recommend(recommendations, points, card_penalty, "Consider hashing, bucketing, or removing high-cardinality columns not used in filters/visuals")
 
     # Circular dependency (-5, hard block)
     if inp.has_circular_dependency:
         score -= 5
         issues.append("Circular dependency detected – will block Fabric migration")
-        recommendations.append("CRITICAL: Resolve circular dependencies before any migration attempt")
+        _recommend(recommendations, points, 5, "CRITICAL: Resolve circular dependencies before any migration attempt")
 
     # Unused columns (>30% = -2)
     if inp.unused_columns_pct > 30:
         score -= 2
         issues.append(f"{inp.unused_columns_pct:.0f}% of columns appear unused")
-        recommendations.append("Remove unused columns to reduce model size and memory footprint")
+        _recommend(recommendations, points, 2, "Remove unused columns to reduce model size and memory footprint")
 
     score = _clamp(score, 0, MAX)
     return DimensionScore(
@@ -198,6 +207,7 @@ def score_model_health(inp: ModelHealthInput) -> DimensionScore:
         pct=round(score / MAX * 100, 1),
         issues=issues,
         recommendations=recommendations,
+        rec_points=points,
     )
 
 
@@ -208,26 +218,27 @@ def score_query_performance(inp: QueryPerformanceInput) -> DimensionScore:
     score = MAX
     issues = []
     recommendations = []
+    points = []  # points lost per recommendation (None = informational)
 
     # Average query duration thresholds
     if inp.avg_query_duration_sec > 30:
         score -= 10
         issues.append(f"Average query duration {inp.avg_query_duration_sec:.1f}s – very slow (>30s)")
-        recommendations.append("Profile slow queries using Performance Analyzer; rewrite iterator-heavy measures with variables")
+        _recommend(recommendations, points, 10, "Profile slow queries using Performance Analyzer; rewrite iterator-heavy measures with variables")
     elif inp.avg_query_duration_sec > 10:
         score -= 6
         issues.append(f"Average query duration {inp.avg_query_duration_sec:.1f}s – slow (>10s)")
-        recommendations.append("Review top slow measures; consider pre-aggregations or summary tables")
+        _recommend(recommendations, points, 6, "Review top slow measures; consider pre-aggregations or summary tables")
     elif inp.avg_query_duration_sec > 5:
         score -= 3
         issues.append(f"Average query duration {inp.avg_query_duration_sec:.1f}s – borderline (>5s)")
-        recommendations.append("Monitor query performance post-migration; Fabric Warehouse may improve this")
+        _recommend(recommendations, points, 3, "Monitor query performance post-migration; Fabric Warehouse may improve this")
 
     # % of queries over 30s
     if inp.pct_queries_over_30s > 20:
         score -= 5
         issues.append(f"{inp.pct_queries_over_30s:.0f}% of queries exceed 30s threshold")
-        recommendations.append("Investigate frequent long-running query shapes in Query Insights; add aggregation tables")
+        _recommend(recommendations, points, 5, "Investigate frequent long-running query shapes in Query Insights; add aggregation tables")
     elif inp.pct_queries_over_30s > 10:
         score -= 3
         issues.append(f"{inp.pct_queries_over_30s:.0f}% of queries exceed 30s threshold")
@@ -237,19 +248,19 @@ def score_query_performance(inp: QueryPerformanceInput) -> DimensionScore:
     if inp.iterator_measure_count > 0:
         score -= iter_penalty
         issues.append(f"{inp.iterator_measure_count} iterator-heavy measure(s) (SUMX/AVERAGEX/FILTER)")
-        recommendations.append("Rewrite iterators with CALCULATE+FILTER or aggregation columns where possible")
+        _recommend(recommendations, points, iter_penalty, "Rewrite iterators with CALCULATE+FILTER or aggregation columns where possible")
 
     # Slow visuals
     if inp.slow_visual_count > 0:
         score -= min(inp.slow_visual_count * 2, 4)
         issues.append(f"{inp.slow_visual_count} visual(s) with >10s render time")
-        recommendations.append("Split large report pages; reduce visual query complexity; use bookmarks to defer loading")
+        _recommend(recommendations, points, min(inp.slow_visual_count * 2, 4), "Split large report pages; reduce visual query complexity; use bookmarks to defer loading")
 
     # DirectQuery mode (inherently slower, but not always bad)
     if inp.direct_query_mode:
         score -= 2
         issues.append("DirectQuery mode – performance depends on underlying source query speed")
-        recommendations.append("Review DirectQuery compatibility with Fabric Warehouse; consider switching to Import or Dual mode")
+        _recommend(recommendations, points, 2, "Review DirectQuery compatibility with Fabric Warehouse; consider switching to Import or Dual mode")
 
     score = _clamp(score, 0, MAX)
     return DimensionScore(
@@ -259,6 +270,7 @@ def score_query_performance(inp: QueryPerformanceInput) -> DimensionScore:
         pct=round(score / MAX * 100, 1),
         issues=issues,
         recommendations=recommendations,
+        rec_points=points,
     )
 
 
@@ -269,16 +281,17 @@ def score_refresh_efficiency(inp: RefreshEfficiencyInput) -> DimensionScore:
     score = MAX
     issues = []
     recommendations = []
+    points = []  # points lost per recommendation (None = informational)
 
     # Refresh failure rate
     if inp.refresh_failure_rate_pct > 20:
         score -= 8
         issues.append(f"{inp.refresh_failure_rate_pct:.0f}% refresh failure rate (last 30 days) – unreliable")
-        recommendations.append("URGENT: Investigate refresh failures; fix data source connectivity and timeout issues before migration")
+        _recommend(recommendations, points, 8, "URGENT: Investigate refresh failures; fix data source connectivity and timeout issues before migration")
     elif inp.refresh_failure_rate_pct > 10:
         score -= 4
         issues.append(f"{inp.refresh_failure_rate_pct:.0f}% refresh failure rate – unstable")
-        recommendations.append("Review refresh error logs; fix intermittent source failures before migration")
+        _recommend(recommendations, points, 4, "Review refresh error logs; fix intermittent source failures before migration")
     elif inp.refresh_failure_rate_pct > 5:
         score -= 2
         issues.append(f"{inp.refresh_failure_rate_pct:.0f}% refresh failure rate – occasional failures")
@@ -287,11 +300,11 @@ def score_refresh_efficiency(inp: RefreshEfficiencyInput) -> DimensionScore:
     if inp.avg_refresh_duration_min > 120:
         score -= 5
         issues.append(f"Average refresh duration {inp.avg_refresh_duration_min:.0f} min – very long (>2hr)")
-        recommendations.append("Implement incremental refresh partitioning; archive cold data to reduce full refresh scope")
+        _recommend(recommendations, points, 5, "Implement incremental refresh partitioning; archive cold data to reduce full refresh scope")
     elif inp.avg_refresh_duration_min > 60:
         score -= 3
         issues.append(f"Average refresh duration {inp.avg_refresh_duration_min:.0f} min – slow (>1hr)")
-        recommendations.append("Consider incremental refresh and partition pruning to reduce refresh window")
+        _recommend(recommendations, points, 3, "Consider incremental refresh and partition pruning to reduce refresh window")
     elif inp.avg_refresh_duration_min > 30:
         score -= 1
         issues.append(f"Average refresh duration {inp.avg_refresh_duration_min:.0f} min")
@@ -300,18 +313,18 @@ def score_refresh_efficiency(inp: RefreshEfficiencyInput) -> DimensionScore:
     if inp.full_refresh_on_large_table:
         score -= 5
         issues.append(f"Full refresh running on large table ({inp.largest_table_row_count:,} rows)")
-        recommendations.append("Implement incremental refresh on large fact tables before migrating to Fabric")
+        _recommend(recommendations, points, 5, "Implement incremental refresh on large fact tables before migrating to Fabric")
 
     # Excessive refresh frequency without incremental
     if inp.refresh_frequency_per_day > 4 and not inp.uses_incremental_refresh:
         score -= 3
         issues.append(f"Refreshing {inp.refresh_frequency_per_day:.0f}x/day without incremental refresh")
-        recommendations.append("High-frequency full refreshes will consume significant Fabric CU capacity; enable incremental refresh")
+        _recommend(recommendations, points, 3, "High-frequency full refreshes will consume significant Fabric CU capacity; enable incremental refresh")
 
     # Reward incremental refresh
     if inp.uses_incremental_refresh:
         score = min(score + 2, MAX)
-        recommendations.append("Incremental refresh is configured – good practice, verify it works correctly post-migration")
+        _recommend(recommendations, points, None, "Incremental refresh is configured – good practice, verify it works correctly post-migration")
 
     score = _clamp(score, 0, MAX)
     return DimensionScore(
@@ -321,15 +334,18 @@ def score_refresh_efficiency(inp: RefreshEfficiencyInput) -> DimensionScore:
         pct=round(score / MAX * 100, 1),
         issues=issues,
         recommendations=recommendations,
+        rec_points=points,
     )
 
 
 def score_usage(inp: UsageInput) -> DimensionScore:
     """Score usage & business value out of 20."""
+    reports_known = inp.report_count is not None  # "no reports" only if actually counted
     inp = _filled(inp)
     MAX = 20.0
     issues = []
     recommendations = []
+    points = []  # points lost per recommendation (None = informational)
 
     # Base score from active users
     if inp.active_users_30d >= 50:
@@ -345,13 +361,13 @@ def score_usage(inp: UsageInput) -> DimensionScore:
     else:
         score = 0.0
         issues.append("No active users in the last 30 days – potential decommission candidate")
-        recommendations.append("Confirm with dataset owner whether this dataset is still needed before migrating")
+        _recommend(recommendations, points, 20, "Confirm with dataset owner whether this dataset is still needed before migrating")
 
     # Stale dataset penalty
     if inp.days_since_last_used > 90:
         score -= 5
         issues.append(f"Not accessed in {inp.days_since_last_used} days – likely stale")
-        recommendations.append(f"Dataset unused for {inp.days_since_last_used} days – validate business need before migration")
+        _recommend(recommendations, points, 5, f"Dataset unused for {inp.days_since_last_used} days – validate business need before migration")
     elif inp.days_since_last_used > 60:
         score -= 3
         issues.append(f"Not accessed in {inp.days_since_last_used} days")
@@ -359,9 +375,9 @@ def score_usage(inp: UsageInput) -> DimensionScore:
     # Report coverage bonus
     if inp.report_count > 5:
         score = min(score + 2, MAX)
-    elif inp.report_count == 0:
+    elif reports_known and inp.report_count == 0:
         issues.append("No reports connected to this dataset")
-        recommendations.append("Verify this dataset is still in use; no connected reports may indicate it can be retired")
+        _recommend(recommendations, points, 1, "Verify this dataset is still in use; no connected reports may indicate it can be retired")
 
     # Certified/endorsed bonus
     if inp.is_certified:
@@ -375,6 +391,7 @@ def score_usage(inp: UsageInput) -> DimensionScore:
         pct=round(score / MAX * 100, 1),
         issues=issues,
         recommendations=recommendations,
+        rec_points=points,
     )
 
 
@@ -385,16 +402,17 @@ def score_size_complexity(inp: SizeComplexityInput) -> DimensionScore:
     score = MAX
     issues = []
     recommendations = []
+    points = []  # points lost per recommendation (None = informational)
 
     # Model size
     if inp.model_size_gb > 10:
         score -= 5
         issues.append(f"Model size {inp.model_size_gb:.1f} GB – very large; high migration effort and Fabric memory cost")
-        recommendations.append("Reduce model size: remove unused columns, archive cold data, implement aggregations")
+        _recommend(recommendations, points, 5, "Reduce model size: remove unused columns, archive cold data, implement aggregations")
     elif inp.model_size_gb > 5:
         score -= 3
         issues.append(f"Model size {inp.model_size_gb:.1f} GB – large; significant Fabric capacity impact")
-        recommendations.append("Review column-level memory usage in Model Memory Analyzer; optimize before migration")
+        _recommend(recommendations, points, 3, "Review column-level memory usage in Model Memory Analyzer; optimize before migration")
     elif inp.model_size_gb > 2:
         score -= 1
         issues.append(f"Model size {inp.model_size_gb:.1f} GB – moderate")
@@ -403,7 +421,7 @@ def score_size_complexity(inp: SizeComplexityInput) -> DimensionScore:
     if inp.table_count > 50:
         score -= 3
         issues.append(f"{inp.table_count} tables – very complex model; high risk of relationship issues post-migration")
-        recommendations.append("Simplify model schema where possible; document all relationships before migration")
+        _recommend(recommendations, points, 3, "Simplify model schema where possible; document all relationships before migration")
     elif inp.table_count > 25:
         score -= 1
         issues.append(f"{inp.table_count} tables – complex model")
@@ -412,7 +430,7 @@ def score_size_complexity(inp: SizeComplexityInput) -> DimensionScore:
     if inp.column_count > 500:
         score -= 2
         issues.append(f"{inp.column_count} columns – wide model; likely contains many unused fields")
-        recommendations.append("Run unused column analysis and remove columns not referenced by any measure or visual")
+        _recommend(recommendations, points, 2, "Run unused column analysis and remove columns not referenced by any measure or visual")
     elif inp.column_count > 200:
         score -= 1
 
@@ -424,6 +442,7 @@ def score_size_complexity(inp: SizeComplexityInput) -> DimensionScore:
         pct=round(score / MAX * 100, 1),
         issues=issues,
         recommendations=recommendations,
+        rec_points=points,
     )
 
 
@@ -492,9 +511,10 @@ _DIMENSIONS = [
      "Post avg_query_duration_sec / pct_queries_over_30s from Query Insights or Log Analytics via bpa-update"),
     ("refresh_efficiency", score_refresh_efficiency, "Refresh Efficiency", 20.0, None,
      "No refresh history available – check the dataset's refresh history in the Power BI service"),
-    # Report count and endorsement alone don't show whether anyone uses the dataset
-    ("usage", score_usage, "Usage & Business Value", 20.0, ("active_users_30d", "days_since_last_used"),
-     "Post active_users_30d / days_since_last_used from the Power BI activity log or usage metrics via bpa-update"),
+    # The score is driven by active users; report count, endorsement or last-used date
+    # alone can't show whether anyone uses the dataset
+    ("usage", score_usage, "Usage & Business Value", 20.0, ("active_users_30d",),
+     "Post active_users_30d (and days_since_last_used) from the Power BI activity log or usage metrics via bpa-update"),
     ("size_complexity", score_size_complexity, "Size & Complexity", 10.0, None,
      "Run notebooks/enrich_scores.ipynb (Semantic Link) to collect model size, table and column counts"),
 ]
@@ -510,7 +530,23 @@ def _unmeasured(name: str, max_score: float, how_to_measure: str) -> DimensionSc
         issues=["Not measured – excluded from the score"],
         recommendations=[how_to_measure],
         measured=False,
+        rec_points=[max_score],
     )
+
+
+_MAX_PRIORITY_FIXES = 5
+
+
+def _priority_fixes(blockers: list[str], dimensions: list[DimensionScore]) -> list[str]:
+    """Blockers first, then recommendations ranked by the points they would recover."""
+    ranked = [(p, text) for d in dimensions for text, p in zip(d.recommendations, d.rec_points)
+              if p is not None and p > 0]
+    ranked.sort(key=lambda x: -x[0])  # stable: ties keep dimension order
+    fixes = []
+    for text in blockers + [t for _, t in ranked]:
+        if text not in fixes:
+            fixes.append(text)
+    return fixes[:_MAX_PRIORITY_FIXES]
 
 
 def score_dataset(inp: DatasetInput) -> ScoringResult:
@@ -555,9 +591,7 @@ def score_dataset(inp: DatasetInput) -> ScoringResult:
     else:
         risk = _migration_risk(total)
 
-    # Top 3 priority fixes across all dimensions
-    all_recs = [r for d in dimensions for r in d.recommendations]
-    priority_fixes = all_recs[:5]
+    priority_fixes = _priority_fixes([reason for _, _, reason in blockers], dimensions)
 
     return ScoringResult(
         dataset_id=inp.dataset_id,

@@ -40,6 +40,15 @@ Fixes from the October 2026 code review. Each entry links to the tests that cove
   score was already under 60); 0 users and unused ≥ 90 days → Consider decommission; 0 users
   otherwise → Fix then migrate. A blocker never improves a worse score-based decision.
   Demo decisions are unchanged. (`tests/test_blockers.py`)
+- **Priority fix list wasn't prioritised.** It returned the first 5 recommendations in dimension
+  order (the code comment said 3) and could include the informational note "Incremental refresh is
+  configured – good practice". Fixes are now ranked by the points each would recover, blockers
+  come first, informational notes are excluded, duplicates removed, capped at 5.
+  (`tests/test_priority_fixes.py`)
+- **"No reports connected" was reported when the report count was unknown**, because the check
+  was `report_count == 0` and the old default was 0. It now only fires when the count was measured.
+- Usage now counts as measured only when `active_users_30d` is known; a last-used date alone no
+  longer produces a usage score that reads the missing user count as zero users.
 
 ### Added
 - Decision **"Needs assessment"** (grey), issued when Model Health or Usage is not measured,
