@@ -138,10 +138,13 @@ def _score_one(ds_id: str) -> dict:
                 "pct": dim.pct,
                 "issues": dim.issues,
                 "recommendations": dim.recommendations,
+                "measured": dim.measured,
             }
             for dim in result.dimensions
         ],
         "priority_fixes": result.priority_fixes,
+        "data_coverage_pct": result.data_coverage_pct,
+        "unmeasured_dimensions": result.unmeasured_dimensions,
     }
 
 
@@ -218,7 +221,10 @@ def get_summary():
     fix = sum(1 for r in results if "Fix then" in r["decision"])
     refactor = sum(1 for r in results if "Major refactor" in r["decision"])
     retire = sum(1 for r in results if "decommission" in r["decision"])
-    avg_score = round(sum(r["total_score"] for r in results) / total, 1) if total else 0
+    needs_assessment = sum(1 for r in results if r["decision"] == MigrationDecision.NEEDS_ASSESSMENT.value)
+    # Average only over datasets with enough data for a decision
+    assessed = [r for r in results if r["decision"] != MigrationDecision.NEEDS_ASSESSMENT.value]
+    avg_score = round(sum(r["total_score"] for r in assessed) / len(assessed), 1) if assessed else 0
 
     # Effort distribution
     total_effort = sum(r["estimated_effort_days"] for r in results)
@@ -234,6 +240,7 @@ def get_summary():
         "fix_migrate": fix,
         "major_refactor": refactor,
         "retire": retire,
+        "needs_assessment": needs_assessment,
         "avg_score": avg_score,
         "total_effort_days": total_effort,
         "workspaces": ws_counts,
@@ -317,12 +324,12 @@ def export_csv():
     writer.writerow([
         "Dataset Name", "Workspace", "Owner", "Score", "Decision",
         "Risk", "Effort (days)", "Size (GB)", "Active Users (30d)",
-        "Model Health %", "Query Perf %", "Refresh Eff %", "Usage %", "Size/Complexity %",
+        "Model Health %", "Query Perf %", "Refresh Eff %", "Usage %", "Size/Complexity %", "Data Coverage %",
         "Owner Decision", "Top Fix 1", "Top Fix 2",
     ])
 
     for r in results:
-        dims = {d["name"]: d["pct"] for d in r["dimensions"]}
+        dims = {d["name"]: (d["pct"] if d["measured"] else "Not measured") for d in r["dimensions"]}
         fixes = r["priority_fixes"]
         writer.writerow([
             r["dataset_name"], r["workspace_name"], r["owner"],
@@ -333,6 +340,7 @@ def export_csv():
             dims.get("Refresh Efficiency", ""),
             dims.get("Usage & Business Value", ""),
             dims.get("Size & Complexity", ""),
+            r["data_coverage_pct"],
             r.get("owner_decision", ""),
             fixes[0] if len(fixes) > 0 else "",
             fixes[1] if len(fixes) > 1 else "",

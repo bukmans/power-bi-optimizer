@@ -105,6 +105,11 @@ Modifiers: −5 if not accessed in >90 days · +2 if certified · +2 if >5 conne
 | **60–79** | 🔧 Fix then migrate | Resolve priority fix list (typically 2–10 days), rescore |
 | **40–59** | ⚠️ Major refactor | Significant model redesign required before migration |
 | **0–39** | ❌ Consider decommission | Validate business need; likely retire |
+| — | ❔ Needs assessment | Model Health or Usage has not been measured yet; run the enrichment notebook / post usage data, then rescore |
+
+Metrics that have not been measured are **excluded** from the score rather than treated as perfect.
+The total is scaled to 100 over the dimensions that were measured, and `data_coverage_pct` in the
+API (and "x% data" in the dashboard) shows how many of the 100 points are backed by real data.
 
 ---
 

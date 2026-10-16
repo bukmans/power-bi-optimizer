@@ -4,7 +4,7 @@ Scores Power BI datasets 0-100 across five dimensions to determine
 whether they should be migrated as-is, fixed then migrated, or retired.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, replace
 from typing import Optional
 from enum import Enum
 
@@ -14,54 +14,57 @@ class MigrationDecision(str, Enum):
     FIX_MIGRATE = "Fix then migrate"
     MAJOR_REFACTOR = "Major refactor required"
     RETIRE = "Consider decommission"
+    NEEDS_ASSESSMENT = "Needs assessment"
 
 
+# Every metric below defaults to None, meaning "not measured". A dimension with no
+# measured metrics is excluded from the total rather than scored as perfect.
 @dataclass
 class ModelHealthInput:
-    bpa_critical_count: int = 0        # Critical BPA rule violations
-    bpa_warning_count: int = 0         # Warning BPA rule violations
-    bidirectional_rel_count: int = 0   # Bidirectional relationships
-    many_to_many_rel_count: int = 0    # Many-to-many relationships
-    high_cardinality_columns: int = 0  # Columns with >1M unique values
-    has_circular_dependency: bool = False
-    unused_columns_pct: float = 0.0    # % of unused columns
+    bpa_critical_count: Optional[int] = None        # Critical BPA rule violations
+    bpa_warning_count: Optional[int] = None         # Warning BPA rule violations
+    bidirectional_rel_count: Optional[int] = None   # Bidirectional relationships
+    many_to_many_rel_count: Optional[int] = None    # Many-to-many relationships
+    high_cardinality_columns: Optional[int] = None  # Columns with >1M unique values
+    has_circular_dependency: Optional[bool] = None
+    unused_columns_pct: Optional[float] = None    # % of unused columns
 
 
 @dataclass
 class QueryPerformanceInput:
-    avg_query_duration_sec: float = 0.0   # Average query duration in seconds
-    pct_queries_over_30s: float = 0.0     # % of queries exceeding 30s
-    iterator_measure_count: int = 0       # SUMX/AVERAGEX/FILTER iterators
-    slow_visual_count: int = 0            # Visuals with >10s render time
-    direct_query_mode: bool = False       # Is DirectQuery (vs Import)
+    avg_query_duration_sec: Optional[float] = None   # Average query duration in seconds
+    pct_queries_over_30s: Optional[float] = None     # % of queries exceeding 30s
+    iterator_measure_count: Optional[int] = None       # SUMX/AVERAGEX/FILTER iterators
+    slow_visual_count: Optional[int] = None            # Visuals with >10s render time
+    direct_query_mode: Optional[bool] = None       # Is DirectQuery (vs Import)
 
 
 @dataclass
 class RefreshEfficiencyInput:
-    refresh_failure_rate_pct: float = 0.0   # % of refreshes that failed (last 30 days)
-    avg_refresh_duration_min: float = 0.0   # Average refresh time in minutes
-    uses_incremental_refresh: bool = False   # Has incremental refresh configured
-    refresh_frequency_per_day: float = 0.0  # How many times refreshed per day
-    largest_table_row_count: int = 0        # Row count of largest table
-    full_refresh_on_large_table: bool = False  # Full refresh on table >10M rows
+    refresh_failure_rate_pct: Optional[float] = None   # % of refreshes that failed (last 30 days)
+    avg_refresh_duration_min: Optional[float] = None   # Average refresh time in minutes
+    uses_incremental_refresh: Optional[bool] = None   # Has incremental refresh configured
+    refresh_frequency_per_day: Optional[float] = None  # How many times refreshed per day
+    largest_table_row_count: Optional[int] = None        # Row count of largest table
+    full_refresh_on_large_table: Optional[bool] = None  # Full refresh on table >10M rows
 
 
 @dataclass
 class UsageInput:
-    active_users_30d: int = 0         # Unique users in last 30 days
-    report_count: int = 0             # Number of reports connected
-    days_since_last_used: int = 0     # Days since any user accessed
-    is_certified: bool = False        # Has been certified/endorsed
-    is_shared_externally: bool = False # Shared outside the org
+    active_users_30d: Optional[int] = None         # Unique users in last 30 days
+    report_count: Optional[int] = None             # Number of reports connected
+    days_since_last_used: Optional[int] = None     # Days since any user accessed
+    is_certified: Optional[bool] = None        # Has been certified/endorsed
+    is_shared_externally: Optional[bool] = None # Shared outside the org
 
 
 @dataclass
 class SizeComplexityInput:
-    model_size_gb: float = 0.0        # Dataset size in GB
-    table_count: int = 0              # Number of tables
-    column_count: int = 0             # Total columns across all tables
-    measure_count: int = 0            # Number of measures
-    relationship_count: int = 0       # Total relationships
+    model_size_gb: Optional[float] = None        # Dataset size in GB
+    table_count: Optional[int] = None              # Number of tables
+    column_count: Optional[int] = None             # Total columns across all tables
+    measure_count: Optional[int] = None            # Number of measures
+    relationship_count: Optional[int] = None       # Total relationships
 
 
 @dataclass
@@ -88,6 +91,7 @@ class DimensionScore:
     pct: float
     issues: list[str] = field(default_factory=list)
     recommendations: list[str] = field(default_factory=list)
+    measured: bool = True
 
 
 @dataclass
@@ -105,8 +109,23 @@ class ScoringResult:
     migration_risk: str  # Low / Medium / High
     last_modified: Optional[str] = None
     created_date: Optional[str] = None
-    model_size_gb: float = 0.0
-    active_users_30d: int = 0
+    model_size_gb: Optional[float] = None
+    active_users_30d: Optional[int] = None
+    data_coverage_pct: float = 100.0              # share of the 100 points backed by real data
+    unmeasured_dimensions: list[str] = field(default_factory=list)
+
+
+def _is_measured(inp, keys: Optional[tuple[str, ...]] = None) -> bool:
+    names = keys or tuple(f.name for f in fields(inp))
+    return any(getattr(inp, n) is not None for n in names)
+
+
+def _filled(inp):
+    """Copy of an input section with unmeasured (None) metrics read as zero / False."""
+    return replace(inp, **{
+        f.name: (False if f.type == Optional[bool] else 0)
+        for f in fields(inp) if getattr(inp, f.name) is None
+    })
 
 
 def _clamp(value: float, min_val: float = 0.0, max_val: float = None) -> float:
@@ -117,6 +136,7 @@ def _clamp(value: float, min_val: float = 0.0, max_val: float = None) -> float:
 
 def score_model_health(inp: ModelHealthInput) -> DimensionScore:
     """Score model health out of 25."""
+    inp = _filled(inp)
     MAX = 25.0
     score = MAX
     issues = []
@@ -182,6 +202,7 @@ def score_model_health(inp: ModelHealthInput) -> DimensionScore:
 
 def score_query_performance(inp: QueryPerformanceInput) -> DimensionScore:
     """Score query performance out of 25."""
+    inp = _filled(inp)
     MAX = 25.0
     score = MAX
     issues = []
@@ -242,6 +263,7 @@ def score_query_performance(inp: QueryPerformanceInput) -> DimensionScore:
 
 def score_refresh_efficiency(inp: RefreshEfficiencyInput) -> DimensionScore:
     """Score refresh efficiency out of 20."""
+    inp = _filled(inp)
     MAX = 20.0
     score = MAX
     issues = []
@@ -303,6 +325,7 @@ def score_refresh_efficiency(inp: RefreshEfficiencyInput) -> DimensionScore:
 
 def score_usage(inp: UsageInput) -> DimensionScore:
     """Score usage & business value out of 20."""
+    inp = _filled(inp)
     MAX = 20.0
     issues = []
     recommendations = []
@@ -356,6 +379,7 @@ def score_usage(inp: UsageInput) -> DimensionScore:
 
 def score_size_complexity(inp: SizeComplexityInput) -> DimensionScore:
     """Score size & complexity out of 10."""
+    inp = _filled(inp)
     MAX = 10.0
     score = MAX
     issues = []
@@ -416,23 +440,64 @@ def _migration_risk(score: float, inp: DatasetInput) -> str:
         return "Low"
     if score >= 60:
         return "Medium"
-    if inp.model_health.has_circular_dependency or inp.refresh_efficiency.refresh_failure_rate_pct > 20:
+    health = _filled(inp.model_health)
+    refresh = _filled(inp.refresh_efficiency)
+    if health.has_circular_dependency or refresh.refresh_failure_rate_pct > 20:
         return "High"
     return "Medium" if score >= 40 else "High"
 
 
+# (input attribute, scorer, display name, max points, fields that count as "measured",
+#  how to get the data when it is missing)
+_DIMENSIONS = [
+    ("model_health", score_model_health, "Model Health", 25.0, None,
+     "Run notebooks/enrich_scores.ipynb (Semantic Link) to collect BPA and relationship metrics"),
+    ("query_performance", score_query_performance, "Query Performance", 25.0, None,
+     "Post avg_query_duration_sec / pct_queries_over_30s from Query Insights or Log Analytics via bpa-update"),
+    ("refresh_efficiency", score_refresh_efficiency, "Refresh Efficiency", 20.0, None,
+     "No refresh history available – check the dataset's refresh history in the Power BI service"),
+    # Report count and endorsement alone don't show whether anyone uses the dataset
+    ("usage", score_usage, "Usage & Business Value", 20.0, ("active_users_30d", "days_since_last_used"),
+     "Post active_users_30d / days_since_last_used from the Power BI activity log or usage metrics via bpa-update"),
+    ("size_complexity", score_size_complexity, "Size & Complexity", 10.0, None,
+     "Run notebooks/enrich_scores.ipynb (Semantic Link) to collect model size, table and column counts"),
+]
+
+# A decision is only issued when these are measured: they decide whether a dataset
+# should be retired or is blocked from migration.
+_REQUIRED_FOR_DECISION = ("Model Health", "Usage & Business Value")
+
+
+def _unmeasured(name: str, max_score: float, how_to_measure: str) -> DimensionScore:
+    return DimensionScore(
+        name=name, score=0.0, max_score=max_score, pct=0.0,
+        issues=["Not measured – excluded from the score"],
+        recommendations=[how_to_measure],
+        measured=False,
+    )
+
+
 def score_dataset(inp: DatasetInput) -> ScoringResult:
     """Run all 5 scoring dimensions and produce a final migration readiness result."""
-    health = score_model_health(inp.model_health)
-    perf = score_query_performance(inp.query_performance)
-    refresh = score_refresh_efficiency(inp.refresh_efficiency)
-    usage = score_usage(inp.usage)
-    size = score_size_complexity(inp.size_complexity)
+    dimensions = []
+    for attr, scorer, name, max_score, keys, how_to_measure in _DIMENSIONS:
+        section = getattr(inp, attr)
+        if _is_measured(section, keys):
+            dimensions.append(scorer(section))
+        else:
+            dimensions.append(_unmeasured(name, max_score, how_to_measure))
 
-    dimensions = [health, perf, refresh, usage, size]
-    total = round(sum(d.score for d in dimensions), 1)
+    measured = [d for d in dimensions if d.measured]
+    measured_max = sum(d.max_score for d in measured)
+    # Scale to 100 over what was actually measured, so missing data is neither
+    # rewarded (scored as perfect) nor punished (scored as zero).
+    total = round(sum(d.score for d in measured) / measured_max * 100, 1) if measured_max else 0.0
+    unmeasured_names = [d.name for d in dimensions if not d.measured]
 
-    if total >= 80:
+    if any(n in unmeasured_names for n in _REQUIRED_FOR_DECISION):
+        decision = MigrationDecision.NEEDS_ASSESSMENT
+        decision_color = "gray"
+    elif total >= 80:
         decision = MigrationDecision.MIGRATE
         decision_color = "green"
     elif total >= 60:
@@ -449,6 +514,7 @@ def score_dataset(inp: DatasetInput) -> ScoringResult:
     all_recs = [r for d in dimensions for r in d.recommendations]
     priority_fixes = all_recs[:5]
 
+    needs_assessment = decision == MigrationDecision.NEEDS_ASSESSMENT
     return ScoringResult(
         dataset_id=inp.dataset_id,
         dataset_name=inp.dataset_name,
@@ -459,10 +525,12 @@ def score_dataset(inp: DatasetInput) -> ScoringResult:
         decision_color=decision_color,
         dimensions=dimensions,
         priority_fixes=priority_fixes,
-        estimated_effort_days=_estimate_effort(total, dimensions),
-        migration_risk=_migration_risk(total, inp),
+        estimated_effort_days=0 if needs_assessment else _estimate_effort(total, measured),
+        migration_risk="Unknown" if needs_assessment else _migration_risk(total, inp),
         last_modified=inp.last_modified,
         created_date=inp.created_date,
         model_size_gb=inp.size_complexity.model_size_gb,
         active_users_30d=inp.usage.active_users_30d,
+        data_coverage_pct=measured_max,
+        unmeasured_dimensions=unmeasured_names,
     )

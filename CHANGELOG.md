@@ -27,3 +27,17 @@ Fixes from the October 2026 code review. Each entry links to the tests that cove
 - **Dataset detail ignored overrides.** `GET /api/datasets/{id}` scored the raw cached input
   while the list applied overrides, so the detail panel and the table could show different
   scores. Both now use one helper (`_score_one`).
+- **Missing data was scored as perfect.** In live mode only refresh history and report count are
+  collected, but model health, query performance and size defaulted to zero issues (full marks),
+  so every live dataset landed around 80 – "Migrate as-is". All scorer metrics now default to
+  `None` (not measured); a dimension with no measured metrics is excluded and the total is scaled
+  to 100 over the measured dimensions. (`tests/test_unmeasured.py`)
+
+### Added
+- Decision **"Needs assessment"** (grey), issued when Model Health or Usage is not measured,
+  with risk `Unknown` and no effort estimate. Each unmeasured dimension says how to collect it.
+- API fields `data_coverage_pct`, `unmeasured_dimensions` and per-dimension `measured`;
+  `needs_assessment` count in `/api/summary` (the average score now excludes these datasets);
+  "Data Coverage %" column in the CSV export, with "Not measured" for missing dimensions.
+- Dashboard: "Needs Assessment" card, decision and risk filters, hatched bars for unmeasured
+  dimensions, "x% data" under partial scores; not-assessed datasets show "—" and sort last.
