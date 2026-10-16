@@ -32,6 +32,14 @@ Fixes from the October 2026 code review. Each entry links to the tests that cove
   so every live dataset landed around 80 – "Migrate as-is". All scorer metrics now default to
   `None` (not measured); a dimension with no measured metrics is excluded and the total is scaled
   to 100 over the measured dimensions. (`tests/test_unmeasured.py`)
+- **Unused and blocked datasets could be "Migrate as-is".** The decision was purely score-based:
+  a healthy dataset with zero users scored 80 ("Migrate as-is", Low risk) and one with a circular
+  dependency scored 95 ("Migrate as-is", Low risk) despite its own "will block migration" message.
+  Blocker rules now set a minimum decision – circular dependency → Major refactor + High risk;
+  refresh failures > 20% → Fix then migrate + High risk (previously only flagged High when the
+  score was already under 60); 0 users and unused ≥ 90 days → Consider decommission; 0 users
+  otherwise → Fix then migrate. A blocker never improves a worse score-based decision.
+  Demo decisions are unchanged. (`tests/test_blockers.py`)
 
 ### Added
 - Decision **"Needs assessment"** (grey), issued when Model Health or Usage is not measured,
@@ -41,3 +49,5 @@ Fixes from the October 2026 code review. Each entry links to the tests that cove
   "Data Coverage %" column in the CSV export, with "Not measured" for missing dimensions.
 - Dashboard: "Needs Assessment" card, decision and risk filters, hatched bars for unmeasured
   dimensions, "x% data" under partial scores; not-assessed datasets show "—" and sort last.
+- `blockers` list in the API and a "Blockers" CSV column explaining any override; the detail
+  panel shows them in a "Why this decision overrides the score" box, the table marks them with ⛔.

@@ -315,7 +315,7 @@ function renderTable(datasets) {
           <div class="flex gap-0.5 items-end">${miniBar}</div>
           <div class="text-xs text-gray-400 mt-1 hidden xl:block">${dims.map(d => d.name.split(' ')[0]).join(' · ')}</div>
         </td>
-        <td class="px-4 py-3.5">${badge}</td>
+        <td class="px-4 py-3.5">${badge}${d.blockers && d.blockers.length ? `<span class="ml-1 text-xs" title="${escHtml(d.blockers.join(' | '))}">⛔</span>` : ''}</td>
         <td class="px-4 py-3.5 text-center hidden lg:table-cell">${riskBadge}</td>
         <td class="px-4 py-3.5 text-center hidden xl:table-cell">
           ${notAssessed ? '<span class="text-xs text-gray-400">—</span>' : d.estimated_effort_days > 0
@@ -476,6 +476,12 @@ function renderDetailModal(d) {
       </div>
       <button onclick="closeDetail()" class="ml-3 text-gray-400 hover:text-gray-600 text-2xl flex-shrink-0">&times;</button>
     </div>
+
+    ${d.blockers && d.blockers.length ? `
+    <div class="bg-red-50 rounded-xl p-4 border border-red-200 mb-5">
+      <h3 class="text-sm font-semibold text-red-900 mb-2">Why this decision overrides the score</h3>
+      <ul class="space-y-1">${d.blockers.map(b => `<li class="text-sm text-red-800 flex gap-1.5"><span>⛔</span>${escHtml(b)}</li>`).join('')}</ul>
+    </div>` : ''}
 
     <!-- Score dimensions -->
     <h3 class="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-3">Score Breakdown</h3>

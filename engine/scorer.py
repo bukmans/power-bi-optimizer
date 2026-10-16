@@ -113,6 +113,7 @@ class ScoringResult:
     active_users_30d: Optional[int] = None
     data_coverage_pct: float = 100.0              # share of the 100 points backed by real data
     unmeasured_dimensions: list[str] = field(default_factory=list)
+    blockers: list[str] = field(default_factory=list)  # conditions that overrode the score
 
 
 def _is_measured(inp, keys: Optional[tuple[str, ...]] = None) -> bool:
@@ -435,16 +436,51 @@ def _estimate_effort(score: float, dimensions: list[DimensionScore]) -> int:
     return base + (total_issues // 3)
 
 
-def _migration_risk(score: float, inp: DatasetInput) -> str:
+def _migration_risk(score: float) -> str:
     if score >= 80:
         return "Low"
     if score >= 60:
         return "Medium"
-    health = _filled(inp.model_health)
-    refresh = _filled(inp.refresh_efficiency)
-    if health.has_circular_dependency or refresh.refresh_failure_rate_pct > 20:
-        return "High"
     return "Medium" if score >= 40 else "High"
+
+
+# Decisions from least to most severe. A blocker sets a floor: the final decision is
+# the more severe of the score-based decision and every blocker's floor.
+_SEVERITY = [MigrationDecision.MIGRATE, MigrationDecision.FIX_MIGRATE,
+             MigrationDecision.MAJOR_REFACTOR, MigrationDecision.RETIRE]
+_DECISION_COLOR = {
+    MigrationDecision.MIGRATE: "green",
+    MigrationDecision.FIX_MIGRATE: "blue",
+    MigrationDecision.MAJOR_REFACTOR: "orange",
+    MigrationDecision.RETIRE: "red",
+    MigrationDecision.NEEDS_ASSESSMENT: "gray",
+}
+
+
+def _blockers(inp: DatasetInput) -> list[tuple[MigrationDecision, bool, str]]:
+    """Conditions that override the score: (minimum decision, forces High risk, reason).
+
+    Only measured values are considered – an unmeasured metric never triggers a blocker.
+    """
+    found = []
+    health, refresh, usage = inp.model_health, inp.refresh_efficiency, inp.usage
+
+    if health.has_circular_dependency:
+        found.append((MigrationDecision.MAJOR_REFACTOR, True,
+                      "Circular dependency – blocks Fabric migration until resolved"))
+    if refresh.refresh_failure_rate_pct is not None and refresh.refresh_failure_rate_pct > 20:
+        found.append((MigrationDecision.FIX_MIGRATE, True,
+                      f"{refresh.refresh_failure_rate_pct:.0f}% refresh failure rate – "
+                      "fix refresh reliability before migrating"))
+    if usage.active_users_30d == 0:
+        if usage.days_since_last_used is not None and usage.days_since_last_used >= 90:
+            found.append((MigrationDecision.RETIRE, False,
+                          f"No active users in 30 days and not used for {usage.days_since_last_used} days – "
+                          "retire unless the owner confirms a business need"))
+        else:
+            found.append((MigrationDecision.FIX_MIGRATE, False,
+                          "No active users in 30 days – confirm business need with the owner before migrating"))
+    return found
 
 
 # (input attribute, scorer, display name, max points, fields that count as "measured",
@@ -494,27 +530,35 @@ def score_dataset(inp: DatasetInput) -> ScoringResult:
     total = round(sum(d.score for d in measured) / measured_max * 100, 1) if measured_max else 0.0
     unmeasured_names = [d.name for d in dimensions if not d.measured]
 
-    if any(n in unmeasured_names for n in _REQUIRED_FOR_DECISION):
+    blockers = _blockers(inp)
+    needs_assessment = any(n in unmeasured_names for n in _REQUIRED_FOR_DECISION)
+
+    if needs_assessment:
         decision = MigrationDecision.NEEDS_ASSESSMENT
-        decision_color = "gray"
-    elif total >= 80:
-        decision = MigrationDecision.MIGRATE
-        decision_color = "green"
-    elif total >= 60:
-        decision = MigrationDecision.FIX_MIGRATE
-        decision_color = "blue"
-    elif total >= 40:
-        decision = MigrationDecision.MAJOR_REFACTOR
-        decision_color = "orange"
     else:
-        decision = MigrationDecision.RETIRE
-        decision_color = "red"
+        if total >= 80:
+            decision = MigrationDecision.MIGRATE
+        elif total >= 60:
+            decision = MigrationDecision.FIX_MIGRATE
+        elif total >= 40:
+            decision = MigrationDecision.MAJOR_REFACTOR
+        else:
+            decision = MigrationDecision.RETIRE
+        for floor, _, _ in blockers:
+            if _SEVERITY.index(floor) > _SEVERITY.index(decision):
+                decision = floor
+
+    if any(high for _, high, _ in blockers):
+        risk = "High"
+    elif needs_assessment:
+        risk = "Unknown"
+    else:
+        risk = _migration_risk(total)
 
     # Top 3 priority fixes across all dimensions
     all_recs = [r for d in dimensions for r in d.recommendations]
     priority_fixes = all_recs[:5]
 
-    needs_assessment = decision == MigrationDecision.NEEDS_ASSESSMENT
     return ScoringResult(
         dataset_id=inp.dataset_id,
         dataset_name=inp.dataset_name,
@@ -522,11 +566,12 @@ def score_dataset(inp: DatasetInput) -> ScoringResult:
         owner=inp.owner,
         total_score=total,
         decision=decision,
-        decision_color=decision_color,
+        decision_color=_DECISION_COLOR[decision],
         dimensions=dimensions,
         priority_fixes=priority_fixes,
         estimated_effort_days=0 if needs_assessment else _estimate_effort(total, measured),
-        migration_risk="Unknown" if needs_assessment else _migration_risk(total, inp),
+        migration_risk=risk,
+        blockers=[reason for _, _, reason in blockers],
         last_modified=inp.last_modified,
         created_date=inp.created_date,
         model_size_gb=inp.size_complexity.model_size_gb,

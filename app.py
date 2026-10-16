@@ -145,6 +145,7 @@ def _score_one(ds_id: str) -> dict:
         "priority_fixes": result.priority_fixes,
         "data_coverage_pct": result.data_coverage_pct,
         "unmeasured_dimensions": result.unmeasured_dimensions,
+        "blockers": result.blockers,
     }
 
 
@@ -325,7 +326,7 @@ def export_csv():
         "Dataset Name", "Workspace", "Owner", "Score", "Decision",
         "Risk", "Effort (days)", "Size (GB)", "Active Users (30d)",
         "Model Health %", "Query Perf %", "Refresh Eff %", "Usage %", "Size/Complexity %", "Data Coverage %",
-        "Owner Decision", "Top Fix 1", "Top Fix 2",
+        "Owner Decision", "Blockers", "Top Fix 1", "Top Fix 2",
     ])
 
     for r in results:
@@ -342,6 +343,7 @@ def export_csv():
             dims.get("Size & Complexity", ""),
             r["data_coverage_pct"],
             r.get("owner_decision", ""),
+            "; ".join(r["blockers"]),
             fixes[0] if len(fixes) > 0 else "",
             fixes[1] if len(fixes) > 1 else "",
         ])

@@ -107,6 +107,16 @@ Modifiers: −5 if not accessed in >90 days · +2 if certified · +2 if >5 conne
 | **0–39** | ❌ Consider decommission | Validate business need; likely retire |
 | — | ❔ Needs assessment | Model Health or Usage has not been measured yet; run the enrichment notebook / post usage data, then rescore |
 
+**Blockers override the score.** The final decision is never better than these floors, and each
+one is listed in `blockers` (and in the dataset detail panel):
+
+| Condition | Minimum decision | Risk |
+|---|---|---|
+| Circular dependency | Major refactor | High |
+| Refresh failure rate > 20% | Fix then migrate | High |
+| 0 active users (30d) and unused ≥ 90 days | Consider decommission | – |
+| 0 active users (30d), recently used or last use unknown | Fix then migrate (confirm need) | – |
+
 Metrics that have not been measured are **excluded** from the score rather than treated as perfect.
 The total is scaled to 100 over the dimensions that were measured, and `data_coverage_pct` in the
 API (and "x% data" in the dashboard) shows how many of the 100 points are backed by real data.
