@@ -428,6 +428,9 @@ This platform supports the three-phase migration approach:
 - **Every `/api` endpoint requires the `X-API-Key` header** (including connect, reset and CSV
   export). The app refuses to start without `OPTIMIZER_API_KEY`, except `python app.py` on
   localhost. Keys are compared in constant time; missing/invalid keys get `401`.
+- Owner decisions and BPA overrides are stored in `data/state.json` (set `OPTIMIZER_STATE_FILE`
+  to move it). The file contains dataset IDs, owner notes and metrics – treat it as internal data.
+  Demo and live state are stored separately.
 - `/healthz` is the only unauthenticated endpoint besides the dashboard page; it returns no data.
 - The platform uses a **service principal with least-privilege** access (`Dataset.Read.All`, `Workspace.Read.All`)
 - Credentials are stored only in your `.env` file — never committed to source control (`.gitignore` excludes it)

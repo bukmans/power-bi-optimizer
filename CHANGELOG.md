@@ -91,8 +91,19 @@ Fixes from the October 2026 code review. Each entry links to the tests that cove
   methods and headers narrowed to what the API uses.
 - Deploy workflow passes `OPTIMIZER_API_KEY` from the `optimizer-api-key` Container App secret;
   setup script and `deploy/README.md` explain how to set it; `.env.example` includes it.
+- **A local `.env` (with the Power BI client secret) was copied into the Docker image** by
+  `COPY . .` – there was no `.dockerignore`. Added one that excludes `.env*`, `data/`, `.git`,
+  the venv, tests and docs.
 
 ### Added
+- **Owner decisions and BPA overrides are persisted** to `data/state.json`
+  (`OPTIMIZER_STATE_FILE` to change). Previously all state was in memory and lost on every
+  restart or redeploy. Writes are atomic (temp file + rename) under a lock; an unreadable file is
+  moved aside as `state.json.corrupt-<timestamp>` rather than overwritten. Demo and live state
+  are stored separately: "Switch back to demo data" clears only demo state, and live decisions
+  survive reconnects. Docker image creates a writable `/app/data` volume and docker-compose mounts
+  a named volume; `deploy/README.md` covers Azure Files for Container Apps (single replica).
+  (`tests/test_persistence.py`)
 - `GET /healthz` – unauthenticated liveness probe returning no data. The docker-compose
   healthcheck used `/api/status`, which now needs a key.
 - Dashboard asks for the API key once per tab (kept in `sessionStorage`), sends it on every call,

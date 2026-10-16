@@ -9,6 +9,7 @@ import json
 import os
 import secrets
 import sys
+import threading
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
@@ -89,18 +90,75 @@ app.add_middleware(
     allow_headers=["X-API-Key", "Content-Type"],
 )
 
-# ── In-memory state ────────────────────────────────────────────────────────────
+# ── State ──────────────────────────────────────────────────────────────────────
+# Owner decisions and BPA overrides are persisted to a JSON file so they survive
+# restarts and redeploys. Demo and live data are kept apart, so resetting the demo
+# never touches decisions recorded against real datasets. The dataset list itself
+# is not persisted: it is re-read from Power BI on connect.
+_DEFAULT_STATE_FILE = Path(__file__).parent / "data" / "state.json"
+_MODES = ("demo", "live")
+_state_lock = threading.Lock()
+
+
+def _state_path() -> Path:
+    return Path(os.getenv("OPTIMIZER_STATE_FILE") or _DEFAULT_STATE_FILE)
+
+
+def _load_state() -> dict:
+    path = _state_path()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("state file is not a JSON object")
+    except FileNotFoundError:
+        data = {}
+    except (ValueError, OSError) as e:
+        # Keep the unreadable file for inspection instead of overwriting it on the next save
+        backup = path.with_name(f"{path.name}.corrupt-{datetime.now():%Y%m%d%H%M%S}")
+        try:
+            path.replace(backup)
+        except OSError:
+            pass
+        print(f"  ! Could not read {path} ({e}); moved to {backup.name}, starting with empty state",
+              file=sys.stderr)
+        data = {}
+    for mode in _MODES:
+        section = data.setdefault(mode, {})
+        section.setdefault("overrides", {})   # dataset_id -> BPA metric overrides
+        section.setdefault("decisions", {})   # dataset_id -> {"decision", "notes", "updated_at"}
+    return data
+
+
+def _save_state() -> None:
+    """Write atomically (temp file + rename) so a crash never leaves a half-written file."""
+    path = _state_path()
+    with _state_lock:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(_state, indent=2, sort_keys=True), encoding="utf-8")
+        os.replace(tmp, path)
+
+
+_state: dict = _load_state()
 _dataset_cache: dict[str, DatasetInput] = {}
-_bpa_overrides: dict[str, dict] = {}  # dataset_id -> BPA metric overrides
-_decisions: dict[str, dict] = {}       # dataset_id -> {"decision", "notes", "updated_at"}
+_bpa_overrides: dict[str, dict] = {}
+_decisions: dict[str, dict] = {}
 _mode: str = "demo"  # "demo" or "live"
 
 
+def _use_mode(mode: str) -> None:
+    """Point the working dicts at the persisted state for this mode."""
+    global _mode, _bpa_overrides, _decisions
+    _mode = mode
+    _bpa_overrides = _state[mode]["overrides"]
+    _decisions = _state[mode]["decisions"]
+
+
 def _load_demo():
-    global _dataset_cache, _mode
+    global _dataset_cache
     # Deep copy so nothing done at runtime can alter the module-level demo data
     _dataset_cache = {ds.dataset_id: copy.deepcopy(ds) for ds in DEMO_DATASETS}
-    _mode = "demo"
+    _use_mode("demo")
 
 
 _load_demo()
@@ -293,7 +351,7 @@ def get_summary():
 @app.post("/api/connect", dependencies=[Depends(require_api_key)])
 async def connect_to_pbi(config: ConnectionConfig):
     """Connect to Power BI REST API and load real datasets."""
-    global _dataset_cache, _mode
+    global _dataset_cache
 
     client = PBIClient(
         tenant_id=config.tenant_id,
@@ -307,17 +365,17 @@ async def connect_to_pbi(config: ConnectionConfig):
     if not datasets:
         raise HTTPException(status_code=400, detail="No datasets found. Check service principal workspace access.")
     _dataset_cache = {ds.dataset_id: ds for ds in datasets}
-    _bpa_overrides.clear()  # overrides belong to the previous dataset set
-    _mode = "live"
+    _use_mode("live")  # live decisions/overrides persist across reconnects (keyed by dataset GUID)
     return {"status": "connected", "dataset_count": len(_dataset_cache)}
 
 
 @app.post("/api/reset-demo", dependencies=[Depends(require_api_key)])
 def reset_demo():
-    """Switch back to demo mode."""
+    """Switch back to demo mode and clear demo decisions/overrides (live ones are kept)."""
     _load_demo()
     _bpa_overrides.clear()
     _decisions.clear()
+    _save_state()
     return {"status": "demo", "dataset_count": len(_dataset_cache)}
 
 
@@ -334,6 +392,7 @@ def update_bpa_metrics(dataset_id: str, update: BPAUpdate):
     # BPA counts does not reset usage, size or query metrics to zero.
     changes = update.model_dump(exclude={"dataset_id"}, exclude_unset=True, exclude_none=True)
     _bpa_overrides.setdefault(dataset_id, {}).update(changes)
+    _save_state()
     return {"status": "updated", "dataset_id": dataset_id, "fields_updated": sorted(changes)}
 
 
@@ -346,12 +405,14 @@ def set_owner_decision(dataset_id: str, decision: OwnerDecision):
         raise HTTPException(status_code=422, detail="dataset_id in body does not match the URL")
     if decision.decision == "":
         _decisions.pop(dataset_id, None)
+        _save_state()
         return {"status": "cleared", "dataset_id": dataset_id, "decision": None}
     _decisions[dataset_id] = {
         "decision": decision.decision,
         "notes": decision.notes,
         "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
+    _save_state()
     return {"status": "saved", "dataset_id": dataset_id, "decision": decision.decision}
 
 

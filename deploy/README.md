@@ -92,6 +92,14 @@ GitHub Actions will:
 
 The public URL is shown in the Azure portal under Container Apps → your app → Application URL.
 
+### Persisting owner decisions
+
+Owner decisions and BPA overrides are saved to `/app/data/state.json`. A container's local disk is
+lost on every redeploy, so mount an Azure Files share at `/app/data`
+([Container Apps storage mounts](https://learn.microsoft.com/azure/container-apps/storage-mounts)).
+The file store supports a **single replica** – keep `--max-replicas 1`, or move the state to a
+database before scaling out. With Docker Compose this is handled by the `optimizer-data` volume.
+
 ### Security note
 
 The service principal created in Step 2 should follow least-privilege. Grant it only

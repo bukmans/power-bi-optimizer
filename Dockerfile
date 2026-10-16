@@ -15,8 +15,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Create a non-root user and switch to it
-RUN adduser --disabled-password --gecos "" appuser
+RUN adduser --disabled-password --gecos "" appuser \
+    && mkdir -p /app/data && chown appuser /app/data
 USER appuser
+
+# Owner decisions and BPA overrides are written here; mount a volume to keep them
+VOLUME ["/app/data"]
 
 EXPOSE 8000
 

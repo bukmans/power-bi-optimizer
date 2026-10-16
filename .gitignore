@@ -48,3 +48,6 @@ coverage.xml
 # Distribution
 *.zip
 *.tar.gz
+
+# Persisted app state (owner decisions, BPA overrides)
+data/
