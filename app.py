@@ -424,6 +424,20 @@ def get_workspaces():
     return [{"workspace_name": w, "dataset_count": sum(1 for r in results if r["workspace_name"] == w)} for w in ws]
 
 
+_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _csv_safe(value):
+    """Stop spreadsheet apps from running text cells as formulas (CSV injection).
+
+    Dataset names and owners come from Power BI and notes are free text, so any of them
+    could start with '=', '+', '-' or '@'. Numbers are left as numbers.
+    """
+    if isinstance(value, str) and value.startswith(_FORMULA_PREFIXES):
+        return "'" + value
+    return value
+
+
 @app.get("/api/export/csv", dependencies=[Depends(require_api_key)])
 def export_csv():
     """Export all scored datasets as CSV."""
@@ -437,13 +451,13 @@ def export_csv():
         "Dataset Name", "Workspace", "Owner", "Score", "Decision",
         "Risk", "Effort (days)", "Size (GB)", "Active Users (30d)",
         "Model Health %", "Query Perf %", "Refresh Eff %", "Usage %", "Size/Complexity %", "Data Coverage %",
-        "Owner Decision", "Blockers", "Top Fix 1", "Top Fix 2",
+        "Owner Decision", "Owner Notes", "Blockers", "Top Fix 1", "Top Fix 2",
     ])
 
     for r in results:
         dims = {d["name"]: (d["pct"] if d["measured"] else "Not measured") for d in r["dimensions"]}
         fixes = r["priority_fixes"]
-        writer.writerow([
+        writer.writerow([_csv_safe(v) for v in [
             r["dataset_name"], r["workspace_name"], r["owner"],
             r["total_score"], r["decision"], r["migration_risk"],
             r["estimated_effort_days"], r["model_size_gb"], r["active_users_30d"],
@@ -454,10 +468,11 @@ def export_csv():
             dims.get("Size & Complexity", ""),
             r["data_coverage_pct"],
             r["owner_decision"] or "",
+            r["owner_decision_notes"] or "",
             "; ".join(r["blockers"]),
             fixes[0] if len(fixes) > 0 else "",
             fixes[1] if len(fixes) > 1 else "",
-        ])
+        ]])
 
     from fastapi.responses import Response
     return Response(

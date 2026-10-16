@@ -112,6 +112,10 @@ Fixes from the October 2026 code review. Each entry links to the tests that cove
   methods and headers narrowed to what the API uses.
 - Deploy workflow passes `OPTIMIZER_API_KEY` from the `optimizer-api-key` Container App secret;
   setup script and `deploy/README.md` explain how to set it; `.env.example` includes it.
+- **CSV export allowed formula injection.** Dataset names and owners come from Power BI and owner
+  notes are free text; a value starting with `=`, `+`, `-` or `@` would run as a formula when the
+  CSV is opened in Excel. Such text cells are now prefixed with `'`; numbers are unchanged. The
+  export also gains an "Owner Notes" column. (`tests/test_csv_export.py`)
 - **A local `.env` (with the Power BI client secret) was copied into the Docker image** by
   `COPY . .` – there was no `.dockerignore`. Added one that excludes `.env*`, `data/`, `.git`,
   the venv, tests and docs.
