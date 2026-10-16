@@ -63,6 +63,15 @@ Fixes from the October 2026 code review. Each entry links to the tests that cove
 - **`/api/connect` garbled its own errors.** Its "No datasets found" `HTTPException` was caught and
   re-wrapped by a broad `except`. Errors are now raised once with a clear message, and BPA
   overrides from the previous dataset set are cleared on connect.
+- **Owner decisions accepted any string and dropped notes.** `decision` is now limited to
+  `migrate` / `fix_migrate` / `retire` (422 otherwise), `""` clears a decision (what the
+  dashboard's "Pending" option sends – previously stored as a decision), the body `dataset_id`
+  must match the URL, and `notes` (max 2000 chars) are stored with a timestamp and returned as
+  `owner_decision_notes`. The dashboard has a notes field and reports save failures.
+  (`tests/test_owner_decision.py`)
+- **Workspace filter gained duplicate entries** every time the dataset list reloaded (after each
+  saved decision, connect or reset), and the reload discarded the user's active filters. The
+  options are now rebuilt and the current filters re-applied.
 - Usage now counts as measured only when `active_users_30d` is known; a last-used date alone no
   longer produces a usage score that reads the missing user count as zero users.
 

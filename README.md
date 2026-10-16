@@ -364,7 +364,7 @@ GET /api/datasets?min_score=0&max_score=39
 }
 ```
 
-Valid `decision` values: `migrate` · `fix_migrate` · `retire`
+Valid `decision` values: `migrate` · `fix_migrate` · `retire`, or `""` to clear. `notes` is optional (max 2000 characters).
 
 ---
 

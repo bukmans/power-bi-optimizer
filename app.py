@@ -12,7 +12,8 @@ import sys
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
-from typing import Optional
+from datetime import datetime, timezone
+from typing import Literal, Optional
 
 from fastapi import FastAPI, HTTPException, Query, Security, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -91,7 +92,7 @@ app.add_middleware(
 # ── In-memory state ────────────────────────────────────────────────────────────
 _dataset_cache: dict[str, DatasetInput] = {}
 _bpa_overrides: dict[str, dict] = {}  # dataset_id -> BPA metric overrides
-_decisions: dict[str, str] = {}        # dataset_id -> owner decision override
+_decisions: dict[str, dict] = {}       # dataset_id -> {"decision", "notes", "updated_at"}
 _mode: str = "demo"  # "demo" or "live"
 
 
@@ -135,8 +136,9 @@ class BPAUpdate(BaseModel):
 
 class OwnerDecision(BaseModel):
     dataset_id: str
-    decision: str  # "migrate" | "fix_migrate" | "retire"
-    notes: str = ""
+    # "" clears a previously recorded decision (the dashboard's "Pending" option)
+    decision: Literal["migrate", "fix_migrate", "retire", ""]
+    notes: str = Field("", max_length=2000)
 
 
 # ── Helper ────────────────────────────────────────────────────────────────────
@@ -166,7 +168,8 @@ def _score_one(ds_id: str) -> dict:
         "model_size_gb": result.model_size_gb,
         "active_users_30d": result.active_users_30d,
         "last_modified": result.last_modified,
-        "owner_decision": _decisions.get(ds_id),
+        "owner_decision": _decisions.get(ds_id, {}).get("decision"),
+        "owner_decision_notes": _decisions.get(ds_id, {}).get("notes"),
         "dimensions": [
             {
                 "name": dim.name,
@@ -339,7 +342,16 @@ def set_owner_decision(dataset_id: str, decision: OwnerDecision):
     """Record the owner's migration decision for a dataset."""
     if dataset_id not in _dataset_cache:
         raise HTTPException(status_code=404, detail="Dataset not found")
-    _decisions[dataset_id] = decision.decision
+    if decision.dataset_id != dataset_id:
+        raise HTTPException(status_code=422, detail="dataset_id in body does not match the URL")
+    if decision.decision == "":
+        _decisions.pop(dataset_id, None)
+        return {"status": "cleared", "dataset_id": dataset_id, "decision": None}
+    _decisions[dataset_id] = {
+        "decision": decision.decision,
+        "notes": decision.notes,
+        "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
     return {"status": "saved", "dataset_id": dataset_id, "decision": decision.decision}
 
 
@@ -380,7 +392,7 @@ def export_csv():
             dims.get("Usage & Business Value", ""),
             dims.get("Size & Complexity", ""),
             r["data_coverage_pct"],
-            r.get("owner_decision", ""),
+            r["owner_decision"] or "",
             "; ".join(r["blockers"]),
             fixes[0] if len(fixes) > 0 else "",
             fixes[1] if len(fixes) > 1 else "",

@@ -257,17 +257,20 @@ async function loadDatasets() {
   if (!res.ok) { showApiError(res); return; }
   allDatasets = await res.json();
 
-  // Populate workspace filter
+  // Rebuild the workspace filter (this runs again after saves, connect and reset),
+  // keeping the current selection if that workspace still exists
   const ws = [...new Set(allDatasets.map(d => d.workspace_name))].sort();
   const sel = document.getElementById('filter-workspace');
+  const current = sel.value;
+  sel.length = 1;  // keep "All Workspaces"
   ws.forEach(w => {
     const opt = document.createElement('option');
     opt.value = w; opt.textContent = w;
     sel.appendChild(opt);
   });
+  sel.value = ws.includes(current) ? current : '';
 
-  filteredDatasets = [...allDatasets];
-  sortDatasets();
+  applyFilters();  // re-applies search/filters and sorts
 }
 
 // ── Summary cards ─────────────────────────────────────────────────────────────
@@ -557,19 +560,25 @@ function renderDetailModal(d) {
           Save
         </button>
       </div>
-      <div id="decision-saved" class="hidden mt-2 text-xs text-green-600">Decision saved.</div>
+      <input id="owner-decision-notes" type="text" maxlength="2000" placeholder="Notes (optional), e.g. who approved"
+        value="${escHtml(d.owner_decision_notes || '')}"
+        class="w-full mt-2 border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+      <div id="decision-saved" class="hidden mt-2 text-xs"></div>
     </div>
   `;
 }
 
 async function saveOwnerDecision(datasetId) {
   const val = document.getElementById('owner-decision-sel').value;
-  await apiFetch(`/api/datasets/${datasetId}/decision`, {
+  const notes = document.getElementById('owner-decision-notes').value.trim();
+  const res = await apiFetch(`/api/datasets/${datasetId}/decision`, {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({dataset_id: datasetId, decision: val}),
+    body: JSON.stringify({dataset_id: datasetId, decision: val, notes}),
   });
-  document.getElementById('decision-saved').classList.remove('hidden');
+  const status = document.getElementById('decision-saved');
+  status.textContent = res.ok ? (val ? 'Decision saved.' : 'Decision cleared.') : `Could not save (HTTP ${res.status}).`;
+  status.className = `mt-2 text-xs ${res.ok ? 'text-green-600' : 'text-red-600'}`;
   await loadDatasets();
 }
 
