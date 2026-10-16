@@ -179,6 +179,27 @@ def get_datasets(
     return results
 
 
+# Must be declared before /api/datasets/{dataset_id}, otherwise "search" is
+# captured as a dataset_id and every search returns 404.
+@app.get("/api/datasets/search", dependencies=[Depends(require_api_key)])
+def search_datasets(q: str = Query(..., description="Partial dataset or workspace name")):
+    """
+    Fuzzy name search — called by the Copilot Studio agent when an analyst
+    types a dataset name in conversation.
+    Returns top 5 matches ranked by score descending.
+    """
+    results = _score_all()
+    q_lower = q.lower()
+    matches = [
+        r for r in results
+        if q_lower in r["dataset_name"].lower() or q_lower in r["workspace_name"].lower()
+    ]
+    matches = sorted(matches, key=lambda x: x["total_score"], reverse=True)[:5]
+    if not matches:
+        raise HTTPException(status_code=404, detail=f"No datasets matching '{q}' found.")
+    return matches
+
+
 @app.get("/api/datasets/{dataset_id}", dependencies=[Depends(require_api_key)])
 def get_dataset(dataset_id: str):
     """Return full scoring detail for a single dataset."""
@@ -304,25 +325,6 @@ def get_workspaces():
     results = _score_all()
     ws = sorted({r["workspace_name"] for r in results})
     return [{"workspace_name": w, "dataset_count": sum(1 for r in results if r["workspace_name"] == w)} for w in ws]
-
-
-@app.get("/api/datasets/search", dependencies=[Depends(require_api_key)])
-def search_datasets(q: str = Query(..., description="Partial dataset or workspace name")):
-    """
-    Fuzzy name search — called by the Copilot Studio agent when an analyst
-    types a dataset name in conversation.
-    Returns top 5 matches ranked by score descending.
-    """
-    results = _score_all()
-    q_lower = q.lower()
-    matches = [
-        r for r in results
-        if q_lower in r["dataset_name"].lower() or q_lower in r["workspace_name"].lower()
-    ]
-    matches = sorted(matches, key=lambda x: x["total_score"], reverse=True)[:5]
-    if not matches:
-        raise HTTPException(status_code=404, detail=f"No datasets matching '{q}' found.")
-    return matches
 
 
 @app.get("/api/export/csv")
