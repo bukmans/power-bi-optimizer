@@ -79,6 +79,20 @@ Fixes from the October 2026 code review. Each entry links to the tests that cove
   (`openapi.json`) gains the new response fields, the previously undocumented `workspaces` and
   `last_modified`, the "Needs assessment" filter value and a 401 response on every operation.
   `tests/test_copilot_contract.py` fails if the spec or cards drift from the API again.
+- **Enrichment notebook could not be opened** – `notebooks/enrich_scores.ipynb` had a stray `"`
+  after the closing brace, making it invalid JSON. Fixed; validated against the nbformat schema.
+- **Notebook posted zeros when a metric failed**, which the scorer reads as "no issues" (a failed
+  size query became a perfect 0 GB model). Each step now returns only what it measured; failed
+  steps are omitted (shown as "not measured") and nothing is posted if nothing was measured.
+- **Notebook relationship and memory queries could never succeed**: they selected columns that
+  `DISCOVER_CALC_DEPENDENCY` / `DISCOVER_STORAGE_TABLES` don't have, and the errors were hidden by
+  the zero fallback, so bidirectional / many-to-many counts were always 0. Replaced with
+  `sempy.fabric.list_relationships`, `list_tables(extended=True)` and `list_columns(extended=True)`;
+  high cardinality now uses the scorer's own threshold (>1M distinct values) instead of a 100 MB
+  dictionary-size proxy. **Not yet run in Fabric** – verify on a real workspace.
+- Notebook sends the `X-API-Key` header (read from the environment / Key Vault, not pasted in) and
+  reports 401s clearly. The README example, which had the same bugs, now points to the notebook.
+  (`tests/test_notebook.py` runs the notebook's own cells with Semantic Link stubbed.)
 - Usage now counts as measured only when `active_users_30d` is known; a last-used date alone no
   longer produces a usage score that reads the missing user count as zero users.
 

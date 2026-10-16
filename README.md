@@ -200,56 +200,31 @@ PBI_CLIENT_SECRET=your-secret-value
 
 The Power BI REST API provides refresh history and report counts. For full model health scores (BPA violations, memory usage, relationship analysis), run a **Semantic Link notebook** in Fabric and POST the results to the platform.
 
-### Example Fabric Notebook
+### Fabric notebook
+
+Import [`notebooks/enrich_scores.ipynb`](notebooks/enrich_scores.ipynb) into a Fabric workspace,
+set `WORKSPACE_NAME`, `OPTIMIZER_URL` and the API key (from Key Vault, not pasted in), and run it
+after connecting the platform to Power BI. It runs BPA, reads model size, cardinality and
+relationships with Semantic Link, and posts the results.
+
+Two rules if you write your own enrichment:
+
+- **Send only what you measured.** Omit a field if its query failed – don't send `0`. A missing
+  field shows as "not measured"; a `0` is read as "no issues" (e.g. a 0 GB, perfect model).
+- **Send the `X-API-Key` header.**
 
 ```python
-# Install: pip install semantic-link semantic-link-labs
-import sempy.fabric as spf
-import requests
+payload = {"dataset_id": dataset_id}
+try:
+    bpa = labs.run_model_bpa(dataset=dataset_name, workspace=workspace, return_dataframe=True)
+    payload["bpa_critical_count"] = int((bpa["Severity"] == "Error").sum())
+    payload["bpa_warning_count"] = int((bpa["Severity"] == "Warning").sum())
+except Exception as e:
+    print(f"BPA not measured: {e}")          # leave the fields out
 
-OPTIMIZER_URL = "http://your-server:8000"
-
-# List all datasets in a workspace
-datasets = spf.list_datasets()
-
-for _, ds in datasets.iterrows():
-    dataset_id = ds['Dataset Id']
-    dataset_name = ds['Dataset Name']
-
-    # Run BPA via semantic-link-labs
-    # https://github.com/microsoft/semantic-link-labs
-    try:
-        import sempy_labs as labs
-        bpa = labs.run_model_bpa(dataset=dataset_name, workspace=ds['Workspace Name'])
-        critical = len(bpa[bpa['Severity'] == 'Error'])
-        warnings = len(bpa[bpa['Severity'] == 'Warning'])
-    except Exception:
-        critical, warnings = 0, 0
-
-    # Get model memory info
-    try:
-        mem = spf.evaluate_dax(
-            dataset=dataset_name,
-            dax_string="SELECT [DIMENSION_NAME],[USED_SIZE] FROM $SYSTEM.DISCOVER_STORAGE_TABLES"
-        )
-        model_size_gb = round(mem['USED_SIZE'].sum() / 1e9, 2)
-        col_count = len(mem)
-    except Exception:
-        model_size_gb, col_count = 0.0, 0
-
-    # Post enriched metrics to the optimizer
-    payload = {
-        "dataset_id": dataset_id,
-        "bpa_critical_count": critical,
-        "bpa_warning_count": warnings,
-        "model_size_gb": model_size_gb,
-        "column_count": col_count,
-    }
-    r = requests.post(f"{OPTIMIZER_URL}/api/datasets/{dataset_id}/bpa-update", json=payload)
-    print(f"Updated {dataset_name}: {r.status_code}")
+requests.post(f"{OPTIMIZER_URL}/api/datasets/{dataset_id}/bpa-update",
+              json=payload, headers={"X-API-Key": OPTIMIZER_API_KEY}, timeout=10)
 ```
-
-Save this as `notebooks/enrich_scores.ipynb` in your Fabric workspace and run it after connecting the platform to Power BI.
 
 ---
 
