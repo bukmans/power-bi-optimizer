@@ -4,6 +4,7 @@ Run:  python app.py
 Then open:  http://localhost:8000
 """
 
+import copy
 import json
 import os
 import secrets
@@ -16,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.security.api_key import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from engine.scorer import score_dataset, DatasetInput, MigrationDecision
 from engine.demo_data import DEMO_DATASETS
@@ -59,7 +60,8 @@ _mode: str = "demo"  # "demo" or "live"
 
 def _load_demo():
     global _dataset_cache, _mode
-    _dataset_cache = {ds.dataset_id: ds for ds in DEMO_DATASETS}
+    # Deep copy so nothing done at runtime can alter the module-level demo data
+    _dataset_cache = {ds.dataset_id: copy.deepcopy(ds) for ds in DEMO_DATASETS}
     _mode = "demo"
 
 
@@ -74,23 +76,24 @@ class ConnectionConfig(BaseModel):
 
 
 class BPAUpdate(BaseModel):
+    """Partial update: only fields present in the request body are applied."""
     model_config = {"protected_namespaces": ()}
     dataset_id: str
-    bpa_critical_count: int = 0
-    bpa_warning_count: int = 0
-    bidirectional_rel_count: int = 0
-    many_to_many_rel_count: int = 0
-    high_cardinality_columns: int = 0
-    has_circular_dependency: bool = False
-    unused_columns_pct: float = 0.0
-    avg_query_duration_sec: float = 0.0
-    pct_queries_over_30s: float = 0.0
-    iterator_measure_count: int = 0
-    model_size_gb: float = 0.0
-    table_count: int = 0
-    column_count: int = 0
-    active_users_30d: int = 0
-    days_since_last_used: int = 0
+    bpa_critical_count: Optional[int] = Field(None, ge=0)
+    bpa_warning_count: Optional[int] = Field(None, ge=0)
+    bidirectional_rel_count: Optional[int] = Field(None, ge=0)
+    many_to_many_rel_count: Optional[int] = Field(None, ge=0)
+    high_cardinality_columns: Optional[int] = Field(None, ge=0)
+    has_circular_dependency: Optional[bool] = None
+    unused_columns_pct: Optional[float] = Field(None, ge=0, le=100)
+    avg_query_duration_sec: Optional[float] = Field(None, ge=0)
+    pct_queries_over_30s: Optional[float] = Field(None, ge=0, le=100)
+    iterator_measure_count: Optional[int] = Field(None, ge=0)
+    model_size_gb: Optional[float] = Field(None, ge=0)
+    table_count: Optional[int] = Field(None, ge=0)
+    column_count: Optional[int] = Field(None, ge=0)
+    active_users_30d: Optional[int] = Field(None, ge=0)
+    days_since_last_used: Optional[int] = Field(None, ge=0)
 
 
 class OwnerDecision(BaseModel):
@@ -100,52 +103,50 @@ class OwnerDecision(BaseModel):
 
 
 # ── Helper ────────────────────────────────────────────────────────────────────
+def _effective_input(ds_id: str) -> DatasetInput:
+    """Cached dataset with any BPA overrides applied, on a copy so the cache is never mutated."""
+    ds_inp = copy.deepcopy(_dataset_cache[ds_id])
+    for k, v in _bpa_overrides.get(ds_id, {}).items():
+        for section in (ds_inp.model_health, ds_inp.query_performance,
+                        ds_inp.size_complexity, ds_inp.usage):
+            if hasattr(section, k):
+                setattr(section, k, v)
+    return ds_inp
+
+
+def _score_one(ds_id: str) -> dict:
+    result = score_dataset(_effective_input(ds_id))
+    return {
+        "dataset_id": result.dataset_id,
+        "dataset_name": result.dataset_name,
+        "workspace_name": result.workspace_name,
+        "owner": result.owner,
+        "total_score": result.total_score,
+        "decision": result.decision.value,
+        "decision_color": result.decision_color,
+        "migration_risk": result.migration_risk,
+        "estimated_effort_days": result.estimated_effort_days,
+        "model_size_gb": result.model_size_gb,
+        "active_users_30d": result.active_users_30d,
+        "last_modified": result.last_modified,
+        "owner_decision": _decisions.get(ds_id),
+        "dimensions": [
+            {
+                "name": dim.name,
+                "score": dim.score,
+                "max_score": dim.max_score,
+                "pct": dim.pct,
+                "issues": dim.issues,
+                "recommendations": dim.recommendations,
+            }
+            for dim in result.dimensions
+        ],
+        "priority_fixes": result.priority_fixes,
+    }
+
+
 def _score_all() -> list[dict]:
-    results = []
-    for ds_id, ds_inp in _dataset_cache.items():
-        # Apply any BPA overrides posted via Semantic Link
-        if ds_id in _bpa_overrides:
-            ov = _bpa_overrides[ds_id]
-            for k, v in ov.items():
-                if hasattr(ds_inp.model_health, k):
-                    setattr(ds_inp.model_health, k, v)
-                if hasattr(ds_inp.query_performance, k):
-                    setattr(ds_inp.query_performance, k, v)
-                if hasattr(ds_inp.size_complexity, k):
-                    setattr(ds_inp.size_complexity, k, v)
-                if hasattr(ds_inp.usage, k):
-                    setattr(ds_inp.usage, k, v)
-
-        result = score_dataset(ds_inp)
-        d = {
-            "dataset_id": result.dataset_id,
-            "dataset_name": result.dataset_name,
-            "workspace_name": result.workspace_name,
-            "owner": result.owner,
-            "total_score": result.total_score,
-            "decision": result.decision.value,
-            "decision_color": result.decision_color,
-            "migration_risk": result.migration_risk,
-            "estimated_effort_days": result.estimated_effort_days,
-            "model_size_gb": result.model_size_gb,
-            "active_users_30d": result.active_users_30d,
-            "last_modified": result.last_modified,
-            "owner_decision": _decisions.get(ds_id),
-            "dimensions": [
-                {
-                    "name": dim.name,
-                    "score": dim.score,
-                    "max_score": dim.max_score,
-                    "pct": dim.pct,
-                    "issues": dim.issues,
-                    "recommendations": dim.recommendations,
-                }
-                for dim in result.dimensions
-            ],
-            "priority_fixes": result.priority_fixes,
-        }
-        results.append(d)
-
+    results = [_score_one(ds_id) for ds_id in _dataset_cache]
     results.sort(key=lambda x: x["total_score"], reverse=True)
     return results
 
@@ -205,33 +206,7 @@ def get_dataset(dataset_id: str):
     """Return full scoring detail for a single dataset."""
     if dataset_id not in _dataset_cache:
         raise HTTPException(status_code=404, detail="Dataset not found")
-    result = score_dataset(_dataset_cache[dataset_id])
-    return {
-        "dataset_id": result.dataset_id,
-        "dataset_name": result.dataset_name,
-        "workspace_name": result.workspace_name,
-        "owner": result.owner,
-        "total_score": result.total_score,
-        "decision": result.decision.value,
-        "decision_color": result.decision_color,
-        "migration_risk": result.migration_risk,
-        "estimated_effort_days": result.estimated_effort_days,
-        "model_size_gb": result.model_size_gb,
-        "active_users_30d": result.active_users_30d,
-        "owner_decision": _decisions.get(dataset_id),
-        "dimensions": [
-            {
-                "name": dim.name,
-                "score": dim.score,
-                "max_score": dim.max_score,
-                "pct": dim.pct,
-                "issues": dim.issues,
-                "recommendations": dim.recommendations,
-            }
-            for dim in result.dimensions
-        ],
-        "priority_fixes": result.priority_fixes,
-    }
+    return _score_one(dataset_id)
 
 
 @app.get("/api/summary", dependencies=[Depends(require_api_key)])
@@ -306,8 +281,11 @@ def update_bpa_metrics(dataset_id: str, update: BPAUpdate):
     if dataset_id not in _dataset_cache:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
-    _bpa_overrides[dataset_id] = update.model_dump(exclude={"dataset_id"})
-    return {"status": "updated", "dataset_id": dataset_id}
+    # Merge only the fields the caller actually sent, so a notebook posting just
+    # BPA counts does not reset usage, size or query metrics to zero.
+    changes = update.model_dump(exclude={"dataset_id"}, exclude_unset=True, exclude_none=True)
+    _bpa_overrides.setdefault(dataset_id, {}).update(changes)
+    return {"status": "updated", "dataset_id": dataset_id, "fields_updated": sorted(changes)}
 
 
 @app.post("/api/datasets/{dataset_id}/decision", dependencies=[Depends(require_api_key)])
