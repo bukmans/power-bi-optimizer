@@ -72,6 +72,13 @@ Fixes from the October 2026 code review. Each entry links to the tests that cove
 - **Workspace filter gained duplicate entries** every time the dataset list reloaded (after each
   saved decision, connect or reset), and the reload discarded the user's active filters. The
   options are now rebuilt and the current filters re-applied.
+- **Copilot Studio used the wrong label for refactor decisions.** The help topic and score card
+  matched "Major refactor needed", but the API returns "Major refactor required", so refactor
+  datasets showed the fallback 'Attention' colour. Labels corrected; "Needs assessment" and
+  blockers added to the help topic, the programme summary and the card colours. The connector spec
+  (`openapi.json`) gains the new response fields, the previously undocumented `workspaces` and
+  `last_modified`, the "Needs assessment" filter value and a 401 response on every operation.
+  `tests/test_copilot_contract.py` fails if the spec or cards drift from the API again.
 - Usage now counts as measured only when `active_users_30d` is known; a last-used date alone no
   longer produces a usage score that reads the missing user count as zero users.
 

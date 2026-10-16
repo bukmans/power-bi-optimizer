@@ -97,6 +97,8 @@ beginDialog:
                   facts:
                     - title: "Total datasets assessed"
                       value: "${Topic.Summary.total}"
+                    - title: "❔ Needs assessment (missing data)"
+                      value: "${Topic.Summary.needs_assessment}"
                     - title: "Average readiness score"
                       value: "${Topic.Summary.avg_score} / 100"
                     - title: "High-risk datasets"

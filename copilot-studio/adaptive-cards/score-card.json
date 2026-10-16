@@ -75,7 +75,7 @@
                 {
                   "type": "TextBlock",
                   "text": "${decision}",
-                  "color": "${if(decision == 'Migrate as-is', 'Good', if(decision == 'Fix then migrate', 'Warning', if(decision == 'Major refactor needed', 'Warning', 'Attention')))}",
+                  "color": "${if(decision == 'Migrate as-is', 'Good', if(decision == 'Fix then migrate', 'Warning', if(decision == 'Major refactor required', 'Warning', if(decision == 'Needs assessment', 'Default', 'Attention'))))}",
                   "weight": "Bolder",
                   "wrap": true
                 }
