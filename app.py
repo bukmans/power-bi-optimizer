@@ -262,13 +262,14 @@ async def connect_to_pbi(config: ConnectionConfig):
     )
     try:
         datasets = await client.fetch_all_datasets()
-        if not datasets:
-            raise HTTPException(status_code=400, detail="No datasets found. Check service principal workspace access.")
-        _dataset_cache = {ds.dataset_id: ds for ds in datasets}
-        _mode = "live"
-        return {"status": "connected", "dataset_count": len(_dataset_cache)}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=f"Could not load datasets from Power BI: {e}")
+    if not datasets:
+        raise HTTPException(status_code=400, detail="No datasets found. Check service principal workspace access.")
+    _dataset_cache = {ds.dataset_id: ds for ds in datasets}
+    _bpa_overrides.clear()  # overrides belong to the previous dataset set
+    _mode = "live"
+    return {"status": "connected", "dataset_count": len(_dataset_cache)}
 
 
 @app.post("/api/reset-demo")

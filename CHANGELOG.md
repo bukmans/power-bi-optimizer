@@ -47,6 +47,22 @@ Fixes from the October 2026 code review. Each entry links to the tests that cove
   (`tests/test_priority_fixes.py`)
 - **"No reports connected" was reported when the report count was unknown**, because the check
   was `report_count == 0` and the old default was 0. It now only fires when the count was measured.
+- **Live mode misread the Power BI API** (`engine/pbi_client.py`, `tests/test_pbi_client.py`):
+  - `uses_incremental_refresh` was set from `isRefreshable`, which only means a dataset *can* be
+    refreshed – nearly every dataset got the incremental-refresh bonus and skipped the
+    "frequent full refresh" penalty. Now left unmeasured (the REST API does not expose it).
+  - Refresh failure rate counted in-progress ("Unknown"), cancelled and disabled refreshes as
+    successes; only Completed/Failed are now counted.
+  - History said "last 30 days" but used the last 30 refreshes of any age; now filtered to 30 days.
+  - Timestamps without fractional seconds (or with 7-digit fractions) failed to parse and were
+    silently dropped, giving 0-minute averages. Parsing is now tolerant.
+  - No refresh history now means "not measured" instead of a perfect 0% failure rate.
+  - A dataset with `endorsementDetails: null` crashed the whole connect.
+  - Refresh history is fetched concurrently (max 8 in flight) over one HTTP client instead of
+    sequentially with a new client per call.
+- **`/api/connect` garbled its own errors.** Its "No datasets found" `HTTPException` was caught and
+  re-wrapped by a broad `except`. Errors are now raised once with a clear message, and BPA
+  overrides from the previous dataset set are cleared on connect.
 - Usage now counts as measured only when `active_users_30d` is known; a last-used date alone no
   longer produces a usage score that reads the missing user count as zero users.
 
