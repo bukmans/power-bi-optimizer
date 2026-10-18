@@ -79,9 +79,13 @@ beginDialog:
                     - title: "60–79 🔧"
                       value: "Fix then migrate"
                     - title: "40–59 ⚠️"
-                      value: "Major refactor needed"
+                      value: "Major refactor required"
                     - title: "0–39 ❌"
                       value: "Consider decommission"
+                    - title: "❔"
+                      value: "Needs assessment – model health or usage not measured yet"
+                    - title: "⛔"
+                      value: "Blockers (circular dependency, failing refresh, no users) override the score"
 
     - kind: Question
       variable: Topic.HelpNext

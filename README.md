@@ -105,6 +105,21 @@ Modifiers: −5 if not accessed in >90 days · +2 if certified · +2 if >5 conne
 | **60–79** | 🔧 Fix then migrate | Resolve priority fix list (typically 2–10 days), rescore |
 | **40–59** | ⚠️ Major refactor | Significant model redesign required before migration |
 | **0–39** | ❌ Consider decommission | Validate business need; likely retire |
+| — | ❔ Needs assessment | Model Health or Usage has not been measured yet; run the enrichment notebook / post usage data, then rescore |
+
+**Blockers override the score.** The final decision is never better than these floors, and each
+one is listed in `blockers` (and in the dataset detail panel):
+
+| Condition | Minimum decision | Risk |
+|---|---|---|
+| Circular dependency | Major refactor | High |
+| Refresh failure rate > 20% | Fix then migrate | High |
+| 0 active users (30d) and unused ≥ 90 days | Consider decommission | – |
+| 0 active users (30d), recently used or last use unknown | Fix then migrate (confirm need) | – |
+
+Metrics that have not been measured are **excluded** from the score rather than treated as perfect.
+The total is scaled to 100 over the dimensions that were measured, and `data_coverage_pct` in the
+API (and "x% data" in the dashboard) shows how many of the 100 points are backed by real data.
 
 ---
 
@@ -125,6 +140,11 @@ python app.py
 ```
 
 Open your browser at **http://localhost:8000**
+
+`python app.py` listens on localhost only and, if `OPTIMIZER_API_KEY` is not set, runs without
+API authentication. Any other way of running it (Docker, `uvicorn`, a non-localhost `HOST`)
+requires `OPTIMIZER_API_KEY`; the dashboard then asks for the key once per browser tab and sends
+it as the `X-API-Key` header.
 
 The platform launches immediately with **10 realistic demo datasets** across 8 workspaces, covering all four migration decisions.
 
@@ -180,56 +200,31 @@ PBI_CLIENT_SECRET=your-secret-value
 
 The Power BI REST API provides refresh history and report counts. For full model health scores (BPA violations, memory usage, relationship analysis), run a **Semantic Link notebook** in Fabric and POST the results to the platform.
 
-### Example Fabric Notebook
+### Fabric notebook
+
+Import [`notebooks/enrich_scores.ipynb`](notebooks/enrich_scores.ipynb) into a Fabric workspace,
+set `WORKSPACE_NAME`, `OPTIMIZER_URL` and the API key (from Key Vault, not pasted in), and run it
+after connecting the platform to Power BI. It runs BPA, reads model size, cardinality and
+relationships with Semantic Link, and posts the results.
+
+Two rules if you write your own enrichment:
+
+- **Send only what you measured.** Omit a field if its query failed – don't send `0`. A missing
+  field shows as "not measured"; a `0` is read as "no issues" (e.g. a 0 GB, perfect model).
+- **Send the `X-API-Key` header.**
 
 ```python
-# Install: pip install semantic-link semantic-link-labs
-import sempy.fabric as spf
-import requests
+payload = {"dataset_id": dataset_id}
+try:
+    bpa = labs.run_model_bpa(dataset=dataset_name, workspace=workspace, return_dataframe=True)
+    payload["bpa_critical_count"] = int((bpa["Severity"] == "Error").sum())
+    payload["bpa_warning_count"] = int((bpa["Severity"] == "Warning").sum())
+except Exception as e:
+    print(f"BPA not measured: {e}")          # leave the fields out
 
-OPTIMIZER_URL = "http://your-server:8000"
-
-# List all datasets in a workspace
-datasets = spf.list_datasets()
-
-for _, ds in datasets.iterrows():
-    dataset_id = ds['Dataset Id']
-    dataset_name = ds['Dataset Name']
-
-    # Run BPA via semantic-link-labs
-    # https://github.com/microsoft/semantic-link-labs
-    try:
-        import sempy_labs as labs
-        bpa = labs.run_model_bpa(dataset=dataset_name, workspace=ds['Workspace Name'])
-        critical = len(bpa[bpa['Severity'] == 'Error'])
-        warnings = len(bpa[bpa['Severity'] == 'Warning'])
-    except Exception:
-        critical, warnings = 0, 0
-
-    # Get model memory info
-    try:
-        mem = spf.evaluate_dax(
-            dataset=dataset_name,
-            dax_string="SELECT [DIMENSION_NAME],[USED_SIZE] FROM $SYSTEM.DISCOVER_STORAGE_TABLES"
-        )
-        model_size_gb = round(mem['USED_SIZE'].sum() / 1e9, 2)
-        col_count = len(mem)
-    except Exception:
-        model_size_gb, col_count = 0.0, 0
-
-    # Post enriched metrics to the optimizer
-    payload = {
-        "dataset_id": dataset_id,
-        "bpa_critical_count": critical,
-        "bpa_warning_count": warnings,
-        "model_size_gb": model_size_gb,
-        "column_count": col_count,
-    }
-    r = requests.post(f"{OPTIMIZER_URL}/api/datasets/{dataset_id}/bpa-update", json=payload)
-    print(f"Updated {dataset_name}: {r.status_code}")
+requests.post(f"{OPTIMIZER_URL}/api/datasets/{dataset_id}/bpa-update",
+              json=payload, headers={"X-API-Key": OPTIMIZER_API_KEY}, timeout=10)
 ```
-
-Save this as `notebooks/enrich_scores.ipynb` in your Fabric workspace and run it after connecting the platform to Power BI.
 
 ---
 
@@ -344,7 +339,7 @@ GET /api/datasets?min_score=0&max_score=39
 }
 ```
 
-Valid `decision` values: `migrate` · `fix_migrate` · `retire`
+Valid `decision` values: `migrate` · `fix_migrate` · `retire`, or `""` to clear. `notes` is optional (max 2000 characters).
 
 ---
 
@@ -405,6 +400,13 @@ This platform supports the three-phase migration approach:
 
 ## Security
 
+- **Every `/api` endpoint requires the `X-API-Key` header** (including connect, reset and CSV
+  export). The app refuses to start without `OPTIMIZER_API_KEY`, except `python app.py` on
+  localhost. Keys are compared in constant time; missing/invalid keys get `401`.
+- Owner decisions and BPA overrides are stored in `data/state.json` (set `OPTIMIZER_STATE_FILE`
+  to move it). The file contains dataset IDs, owner notes and metrics – treat it as internal data.
+  Demo and live state are stored separately.
+- `/healthz` is the only unauthenticated endpoint besides the dashboard page; it returns no data.
 - The platform uses a **service principal with least-privilege** access (`Dataset.Read.All`, `Workspace.Read.All`)
 - Credentials are stored only in your `.env` file — never committed to source control (`.gitignore` excludes it)
 - No data leaves your environment — all scoring happens locally

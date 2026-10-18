@@ -67,3 +67,8 @@ echo "  AZURE_CREDENTIALS     = <JSON from: az ad sp create-for-rbac --role cont
 echo "  PBI_TENANT_ID         = <your Entra tenant ID>"
 echo "  PBI_CLIENT_ID         = <your service principal / app registration client ID>"
 echo "  PBI_CLIENT_SECRET     = <your service principal client secret>"
+echo ""
+echo "The app requires an API key. After the first deploy creates the Container App, set it with:"
+echo "  az containerapp secret set --name $APP_NAME --resource-group $RESOURCE_GROUP \\"
+echo "    --secrets optimizer-api-key=\$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+echo "Share the key only with dashboard users and the Copilot Studio connection."

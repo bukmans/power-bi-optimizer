@@ -16,6 +16,9 @@ docker compose up --build
 
 Open your browser at **http://localhost:8000**.
 
+The container needs an API key: copy `.env.example` to `.env` and set `OPTIMIZER_API_KEY`
+(the container refuses to start without one). The dashboard asks for the key once per browser tab.
+
 ---
 
 ## Option B — Team Shared Server
@@ -73,6 +76,12 @@ Go to your repo → **Settings → Secrets and variables → Actions → New rep
 | `PBI_CLIENT_ID` | Azure portal → App registrations → your app → Application (client) ID |
 | `PBI_CLIENT_SECRET` | Azure portal → App registrations → your app → Certificates & secrets |
 
+Then set the API key as a Container App secret (the app refuses to start without it):
+
+```bash
+az containerapp secret set --name power-bi-optimizer --resource-group rg-pbi-optimizer   --secrets optimizer-api-key=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
+```
+
 ### Step 3 — Deploy
 
 Push any commit to `main` (or trigger manually via **Actions → Run workflow**).
@@ -82,6 +91,14 @@ GitHub Actions will:
 2. Deploy the new image to Azure Container Apps with external ingress on port 8000.
 
 The public URL is shown in the Azure portal under Container Apps → your app → Application URL.
+
+### Persisting owner decisions
+
+Owner decisions and BPA overrides are saved to `/app/data/state.json`. A container's local disk is
+lost on every redeploy, so mount an Azure Files share at `/app/data`
+([Container Apps storage mounts](https://learn.microsoft.com/azure/container-apps/storage-mounts)).
+The file store supports a **single replica** – keep `--max-replicas 1`, or move the state to a
+database before scaling out. With Docker Compose this is handled by the `optimizer-data` volume.
 
 ### Security note
 

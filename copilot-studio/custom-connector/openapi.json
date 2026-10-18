@@ -29,6 +29,7 @@
         "operationId": "GetStatus",
         "parameters": [],
         "responses": {
+          "401": { "description": "Missing or invalid API key" },
           "200": {
             "description": "Status response",
             "schema": {
@@ -49,6 +50,7 @@
         "operationId": "GetSummary",
         "parameters": [],
         "responses": {
+          "401": { "description": "Missing or invalid API key" },
           "200": {
             "description": "Summary statistics",
             "schema": {
@@ -59,6 +61,8 @@
                 "fix_migrate": { "type": "integer" },
                 "major_refactor": { "type": "integer" },
                 "retire": { "type": "integer" },
+                "needs_assessment": { "type": "integer" },
+                "workspaces": { "type": "object", "description": "Dataset count per workspace name", "additionalProperties": { "type": "integer" } },
                 "avg_score": { "type": "number" },
                 "total_effort_days": { "type": "integer" },
                 "high_risk": { "type": "integer" },
@@ -76,6 +80,7 @@
         "operationId": "GetWorkspaces",
         "parameters": [],
         "responses": {
+          "401": { "description": "Missing or invalid API key" },
           "200": {
             "description": "List of workspaces",
             "schema": {
@@ -108,6 +113,7 @@
           }
         ],
         "responses": {
+          "401": { "description": "Missing or invalid API key" },
           "200": {
             "description": "Matching datasets with full scores",
             "schema": {
@@ -142,7 +148,7 @@
             "type": "string",
             "description": "Filter by migration decision",
             "x-ms-summary": "Migration decision",
-            "enum": ["Migrate as-is", "Fix then migrate", "Major refactor", "Consider decommission"]
+            "enum": ["Migrate as-is", "Fix then migrate", "Major refactor", "Consider decommission", "Needs assessment"]
           },
           {
             "name": "min_score",
@@ -162,6 +168,7 @@
           }
         ],
         "responses": {
+          "401": { "description": "Missing or invalid API key" },
           "200": {
             "description": "List of scored datasets",
             "schema": {
@@ -188,6 +195,7 @@
           }
         ],
         "responses": {
+          "401": { "description": "Missing or invalid API key" },
           "200": {
             "description": "Full dataset scoring detail",
             "schema": { "$ref": "#/definitions/DatasetDetail" }
@@ -239,6 +247,7 @@
           }
         ],
         "responses": {
+          "401": { "description": "Missing or invalid API key" },
           "200": {
             "description": "Decision saved successfully",
             "schema": {
@@ -270,6 +279,11 @@
         "model_size_gb": { "type": "number" },
         "active_users_30d": { "type": "integer" },
         "owner_decision": { "type": "string" },
+        "owner_decision_notes": { "type": "string" },
+        "last_modified": { "type": "string" },
+        "data_coverage_pct": { "type": "number", "description": "Share of the 100 points backed by measured data" },
+        "unmeasured_dimensions": { "type": "array", "items": { "type": "string" } },
+        "blockers": { "type": "array", "items": { "type": "string" }, "description": "Conditions that overrode the score-based decision" },
         "priority_fixes": {
           "type": "array",
           "items": { "type": "string" }
@@ -292,7 +306,8 @@
                   "max_score": { "type": "integer" },
                   "pct": { "type": "number" },
                   "issues": { "type": "array", "items": { "type": "string" } },
-                  "recommendations": { "type": "array", "items": { "type": "string" } }
+                  "recommendations": { "type": "array", "items": { "type": "string" } },
+                  "measured": { "type": "boolean" }
                 }
               }
             }

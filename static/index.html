@@ -59,9 +59,9 @@
       <button onclick="openConnectModal()" class="text-sm bg-white text-fabric px-3 py-1.5 rounded-md font-medium hover:bg-blue-50 transition">
         Connect to Power BI
       </button>
-      <a href="/api/export/csv" class="text-sm border border-white/40 px-3 py-1.5 rounded-md hover:bg-blue-700 transition">
+      <button onclick="exportCsv()" class="text-sm border border-white/40 px-3 py-1.5 rounded-md hover:bg-blue-700 transition">
         Export CSV
-      </a>
+      </button>
     </div>
   </div>
 </nav>
@@ -70,8 +70,8 @@
 <div class="max-w-screen-xl mx-auto px-6 py-8">
 
   <!-- Summary Cards -->
-  <div id="summary-cards" class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4 mb-8">
-    <div class="col-span-2 md:col-span-4 lg:col-span-7 flex items-center justify-center py-6">
+  <div id="summary-cards" class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4 mb-8">
+    <div class="col-span-2 md:col-span-4 lg:col-span-8 flex items-center justify-center py-6">
       <div class="spinner"></div>
     </div>
   </div>
@@ -87,6 +87,7 @@
       <option value="Fix then migrate">Fix then migrate</option>
       <option value="Major refactor">Major refactor</option>
       <option value="decommission">Retire / Decommission</option>
+      <option value="Needs assessment">Needs assessment</option>
     </select>
     <select id="filter-workspace" class="border border-gray-300 rounded-lg px-3 py-2 text-sm" onchange="applyFilters()">
       <option value="">All Workspaces</option>
@@ -96,6 +97,7 @@
       <option value="Low">Low Risk</option>
       <option value="Medium">Medium Risk</option>
       <option value="High">High Risk</option>
+      <option value="Unknown">Unknown (not assessed)</option>
     </select>
     <button onclick="clearFilters()" class="text-sm text-gray-500 hover:text-gray-800 underline">Clear</button>
     <span id="result-count" class="ml-auto text-sm text-gray-500"></span>
@@ -186,35 +188,89 @@ let sortField = 'total_score';
 let sortDir = -1; // -1 = desc
 
 // ── Boot ─────────────────────────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', () => {
-  loadSummary();
-  loadDatasets();
+document.addEventListener('DOMContentLoaded', async () => {
+  // Sequential so a missing key prompts once, not once per request
+  if (await loadSummary()) await loadDatasets();
 });
+
+function showApiError(res) {
+  const msg = res.status === 401
+    ? 'An API key is required. <a href="" class="underline">Reload</a> to enter it.'
+    : `Could not load data (HTTP ${res.status}).`;
+  document.getElementById('summary-cards').innerHTML =
+    `<div class="col-span-2 md:col-span-4 lg:col-span-8 text-center text-sm text-red-700 bg-red-50 border border-red-200 rounded-xl py-6">${msg}</div>`;
+  document.getElementById('dataset-table-body').innerHTML = '';
+}
+
+// ── API access ────────────────────────────────────────────────────────────────
+// Every /api call needs the X-API-Key header. The key is asked for once and kept
+// for this browser tab only (sessionStorage), never in the page source.
+const KEY_STORE = 'optimizer-api-key';
+
+function getApiKey() {
+  try { return sessionStorage.getItem(KEY_STORE) || ''; } catch { return ''; }
+}
+
+function setApiKey(key) {
+  try { key ? sessionStorage.setItem(KEY_STORE, key) : sessionStorage.removeItem(KEY_STORE); } catch {}
+}
+
+async function apiFetch(url, options = {}) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const headers = {...(options.headers || {})};
+    const key = getApiKey();
+    if (key) headers['X-API-Key'] = key;
+    const res = await fetch(url, {...options, headers});
+    if (res.status !== 401) return res;
+    setApiKey('');
+    const entered = window.prompt(attempt === 0
+      ? 'Enter the Migration Optimizer API key:'
+      : 'That key was not accepted. Enter the API key:');
+    if (!entered) return res;
+    setApiKey(entered.trim());
+  }
+  throw new Error('API key not accepted');
+}
+
+async function exportCsv() {
+  const res = await apiFetch('/api/export/csv');
+  if (!res.ok) { alert('Export failed (' + res.status + ')'); return; }
+  const url = URL.createObjectURL(await res.blob());
+  const a = Object.assign(document.createElement('a'), {href: url, download: 'migration_readiness_report.csv'});
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
 
 // ── Data fetching ─────────────────────────────────────────────────────────────
 async function loadSummary() {
-  const res = await fetch('/api/summary');
+  const res = await apiFetch('/api/summary');
+  if (!res.ok) { showApiError(res); return false; }
   const s = await res.json();
   renderSummaryCards(s);
   document.getElementById('mode-badge').textContent =
     s.mode === 'live' ? 'Live – Power BI' : 'Demo Mode';
+  return true;
 }
 
 async function loadDatasets() {
-  const res = await fetch('/api/datasets');
+  const res = await apiFetch('/api/datasets');
+  if (!res.ok) { showApiError(res); return; }
   allDatasets = await res.json();
 
-  // Populate workspace filter
+  // Rebuild the workspace filter (this runs again after saves, connect and reset),
+  // keeping the current selection if that workspace still exists
   const ws = [...new Set(allDatasets.map(d => d.workspace_name))].sort();
   const sel = document.getElementById('filter-workspace');
+  const current = sel.value;
+  sel.length = 1;  // keep "All Workspaces"
   ws.forEach(w => {
     const opt = document.createElement('option');
     opt.value = w; opt.textContent = w;
     sel.appendChild(opt);
   });
+  sel.value = ws.includes(current) ? current : '';
 
-  filteredDatasets = [...allDatasets];
-  renderTable(filteredDatasets);
+  applyFilters();  // re-applies search/filters and sorts
 }
 
 // ── Summary cards ─────────────────────────────────────────────────────────────
@@ -226,6 +282,7 @@ function renderSummaryCards(s) {
     { label: 'Fix & Migrate', value: s.fix_migrate, sub: 'score 60–79', color: 'bg-blue-50 border-blue-200', icon: '🔧' },
     { label: 'Major Refactor', value: s.major_refactor, sub: 'score 40–59', color: 'bg-orange-50 border-orange-200', icon: '⚠️' },
     { label: 'Retire / Decommission', value: s.retire, sub: 'score < 40', color: 'bg-red-50 border-red-200', icon: '❌' },
+    { label: 'Needs Assessment', value: s.needs_assessment || 0, sub: 'missing health or usage data', color: 'bg-gray-50 border-gray-300', icon: '❔' },
     { label: 'High Risk', value: s.high_risk, sub: 'need attention', color: 'bg-yellow-50 border-yellow-200', icon: '🔴' },
   ];
 
@@ -247,6 +304,7 @@ function filterByCard(label) {
     'Fix & Migrate': 'Fix then migrate',
     'Major Refactor': 'Major refactor',
     'Retire / Decommission': 'decommission',
+    'Needs Assessment': 'Needs assessment',
   };
   const v = map[label];
   if (v) {
@@ -271,14 +329,20 @@ function renderTable(datasets) {
     const scoreColor = scorePct >= 80 ? 'text-green-700' : scorePct >= 60 ? 'text-blue-700' : scorePct >= 40 ? 'text-orange-600' : 'text-red-700';
     const barColor = scorePct >= 80 ? 'bg-green-500' : scorePct >= 60 ? 'bg-blue-500' : scorePct >= 40 ? 'bg-orange-400' : 'bg-red-500';
     const badge = decisionBadge(d.decision);
+    const notAssessed = d.decision === 'Needs assessment';
+    const coverage = d.data_coverage_pct ?? 100;
     const riskBadge = d.migration_risk === 'High'
       ? '<span class="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-medium">High</span>'
       : d.migration_risk === 'Medium'
       ? '<span class="text-xs px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-700 font-medium">Med</span>'
+      : d.migration_risk === 'Unknown'
+      ? '<span class="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 font-medium">Unknown</span>'
       : '<span class="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">Low</span>';
 
     const dims = d.dimensions || [];
     const miniBar = dims.map(dim => {
+      if (dim.measured === false)
+        return `<div title="${dim.name}: not measured" style="flex:1;height:6px;border-radius:3px;background:repeating-linear-gradient(45deg,#e5e7eb 0 3px,#f9fafb 3px 6px)"></div>`;
       const pct = dim.pct;
       const c = pct >= 80 ? '#22c55e' : pct >= 60 ? '#3b82f6' : pct >= 40 ? '#f97316' : '#ef4444';
       return `<div title="${dim.name}: ${pct}%" style="flex:1;height:6px;border-radius:3px;background:#e5e7eb;overflow:hidden">
@@ -295,19 +359,20 @@ function renderTable(datasets) {
         <td class="px-4 py-3.5 text-gray-600 text-sm hidden md:table-cell">${escHtml(d.workspace_name)}</td>
         <td class="px-4 py-3.5 text-gray-500 text-sm hidden lg:table-cell">${escHtml(d.owner)}</td>
         <td class="px-4 py-3.5 text-center">
-          <span class="text-2xl font-bold ${scoreColor}">${d.total_score}</span>
-          <div class="w-12 mx-auto mt-1 h-1.5 rounded-full bg-gray-200 overflow-hidden">
+          <span class="text-2xl font-bold ${notAssessed ? 'text-gray-400' : scoreColor}" title="${notAssessed ? `Partial score ${d.total_score} – not enough data for a decision` : ''}">${notAssessed ? '—' : d.total_score}</span>
+          ${coverage < 100 ? `<div class="text-[10px] text-gray-400" title="Share of the 100 points backed by measured data">${coverage}% data</div>` : ''}
+          ${notAssessed ? '' : `<div class="w-12 mx-auto mt-1 h-1.5 rounded-full bg-gray-200 overflow-hidden">
             <div class="h-full ${barColor} score-bar-fill" style="width:${scorePct}%"></div>
-          </div>
+          </div>`}
         </td>
         <td class="px-4 py-3.5">
           <div class="flex gap-0.5 items-end">${miniBar}</div>
           <div class="text-xs text-gray-400 mt-1 hidden xl:block">${dims.map(d => d.name.split(' ')[0]).join(' · ')}</div>
         </td>
-        <td class="px-4 py-3.5">${badge}</td>
+        <td class="px-4 py-3.5">${badge}${d.blockers && d.blockers.length ? `<span class="ml-1 text-xs" title="${escHtml(d.blockers.join(' | '))}">⛔</span>` : ''}</td>
         <td class="px-4 py-3.5 text-center hidden lg:table-cell">${riskBadge}</td>
         <td class="px-4 py-3.5 text-center hidden xl:table-cell">
-          ${d.estimated_effort_days > 0
+          ${notAssessed ? '<span class="text-xs text-gray-400">—</span>' : d.estimated_effort_days > 0
             ? `<span class="text-sm text-gray-600">${d.estimated_effort_days}d</span>`
             : '<span class="text-xs text-green-600">None</span>'}
         </td>
@@ -327,6 +392,8 @@ function decisionBadge(decision) {
     return `<span class="text-xs px-2.5 py-1 rounded-full badge-blue font-medium whitespace-nowrap">🔧 Fix &amp; Migrate</span>`;
   if (decision.includes('Major refactor'))
     return `<span class="text-xs px-2.5 py-1 rounded-full badge-orange font-medium whitespace-nowrap">⚠️ Major Refactor</span>`;
+  if (decision === 'Needs assessment')
+    return `<span class="text-xs px-2.5 py-1 rounded-full badge-gray font-medium whitespace-nowrap">❔ Needs assessment</span>`;
   return `<span class="text-xs px-2.5 py-1 rounded-full badge-red font-medium whitespace-nowrap">❌ Retire</span>`;
 }
 
@@ -366,6 +433,11 @@ function sortBy(field) {
 
 function sortDatasets() {
   filteredDatasets.sort((a, b) => {
+    // Datasets without enough data for a decision always sort after scored ones
+    if (sortField === 'total_score') {
+      const an = a.decision === 'Needs assessment', bn = b.decision === 'Needs assessment';
+      if (an !== bn) return an ? 1 : -1;
+    }
     let av = a[sortField], bv = b[sortField];
     if (typeof av === 'string') av = av.toLowerCase();
     if (typeof bv === 'string') bv = bv.toLowerCase();
@@ -381,18 +453,18 @@ async function openDetail(datasetId) {
     <div class="flex justify-center py-12"><div class="spinner"></div></div>`;
   document.body.style.overflow = 'hidden';
 
-  const res = await fetch(`/api/datasets/${datasetId}`);
+  const res = await apiFetch(`/api/datasets/${datasetId}`);
   const d = await res.json();
   renderDetailModal(d);
 }
 
 function renderDetailModal(d) {
   const totalPct = d.total_score;
-  const ringColor = totalPct >= 80 ? '#22c55e' : totalPct >= 60 ? '#3b82f6' : totalPct >= 40 ? '#f97316' : '#ef4444';
+  const ringColor = d.decision === 'Needs assessment' ? '#9ca3af' : totalPct >= 80 ? '#22c55e' : totalPct >= 60 ? '#3b82f6' : totalPct >= 40 ? '#f97316' : '#ef4444';
   const dimColors = ['#6366f1','#3b82f6','#06b6d4','#10b981','#f59e0b'];
 
   const dimsHtml = (d.dimensions || []).map((dim, i) => {
-    const c = dimColors[i % dimColors.length];
+    const c = dim.measured === false ? '#9ca3af' : dimColors[i % dimColors.length];
     const issueHtml = dim.issues.length
       ? dim.issues.map(iss => `<li class="text-xs text-gray-600 flex gap-1.5"><span class="text-orange-400 mt-0.5">⚠</span>${escHtml(iss)}</li>`).join('')
       : `<li class="text-xs text-green-600 flex gap-1.5"><span>✓</span>No issues detected</li>`;
@@ -404,7 +476,7 @@ function renderDetailModal(d) {
       <div class="bg-gray-50 rounded-xl p-4 border border-gray-100">
         <div class="flex items-center justify-between mb-2">
           <span class="font-semibold text-sm text-gray-800">${escHtml(dim.name)}</span>
-          <span class="font-bold text-sm" style="color:${c}">${dim.score.toFixed(1)} / ${dim.max_score}</span>
+          <span class="font-bold text-sm" style="color:${c}">${dim.measured === false ? 'Not measured' : `${dim.score.toFixed(1)} / ${dim.max_score}`}</span>
         </div>
         <div class="dim-bar mb-3">
           <div class="dim-fill" style="width:${dim.pct}%;background:${c}"></div>
@@ -437,7 +509,7 @@ function renderDetailModal(d) {
           ${badge}
           <span class="text-xs text-gray-400">Owner: ${escHtml(d.owner)}</span>
           ${d.model_size_gb ? `<span class="text-xs text-gray-400">Size: ${d.model_size_gb.toFixed(1)} GB</span>` : ''}
-          ${d.active_users_30d !== undefined ? `<span class="text-xs text-gray-400">Users: ${d.active_users_30d} (30d)</span>` : ''}
+          ${d.active_users_30d != null ? `<span class="text-xs text-gray-400">Users: ${d.active_users_30d} (30d)</span>` : ''}
         </div>
       </div>
       <div class="flex flex-col items-center flex-shrink-0">
@@ -445,18 +517,25 @@ function renderDetailModal(d) {
           <svg viewBox="0 0 36 36" class="w-20 h-20 -rotate-90">
             <circle cx="18" cy="18" r="15.9" fill="none" stroke="#e5e7eb" stroke-width="3"/>
             <circle cx="18" cy="18" r="15.9" fill="none" stroke="${ringColor}" stroke-width="3"
-              stroke-dasharray="${totalPct} ${100-totalPct}" stroke-linecap="round"/>
+              stroke-dasharray="${d.decision === 'Needs assessment' ? 0 : totalPct} ${d.decision === 'Needs assessment' ? 100 : 100-totalPct}" stroke-linecap="round"/>
           </svg>
           <div class="absolute inset-0 flex flex-col items-center justify-center">
-            <span class="text-2xl font-black" style="color:${ringColor}">${d.total_score}</span>
+            <span class="text-2xl font-black" style="color:${ringColor}">${d.decision === 'Needs assessment' ? '—' : d.total_score}</span>
             <span class="text-xs text-gray-400 -mt-1">/ 100</span>
           </div>
         </div>
-        <div class="text-xs text-gray-500 mt-1">Risk: <span class="font-medium ${d.migration_risk==='High'?'text-red-600':d.migration_risk==='Medium'?'text-yellow-600':'text-green-600'}">${d.migration_risk}</span></div>
+        <div class="text-xs text-gray-500 mt-1">Risk: <span class="font-medium ${d.migration_risk==='High'?'text-red-600':d.migration_risk==='Medium'?'text-yellow-600':d.migration_risk==='Unknown'?'text-gray-500':'text-green-600'}">${escHtml(d.migration_risk)}</span></div>
+        ${(d.data_coverage_pct ?? 100) < 100 ? `<div class="text-xs text-gray-500" title="Not measured: ${escHtml((d.unmeasured_dimensions||[]).join(', '))}">Based on ${d.data_coverage_pct}% of data</div>` : ''}
         ${d.estimated_effort_days > 0 ? `<div class="text-xs text-gray-500">Effort: <span class="font-medium">${d.estimated_effort_days}d</span></div>` : ''}
       </div>
       <button onclick="closeDetail()" class="ml-3 text-gray-400 hover:text-gray-600 text-2xl flex-shrink-0">&times;</button>
     </div>
+
+    ${d.blockers && d.blockers.length ? `
+    <div class="bg-red-50 rounded-xl p-4 border border-red-200 mb-5">
+      <h3 class="text-sm font-semibold text-red-900 mb-2">Why this decision overrides the score</h3>
+      <ul class="space-y-1">${d.blockers.map(b => `<li class="text-sm text-red-800 flex gap-1.5"><span>⛔</span>${escHtml(b)}</li>`).join('')}</ul>
+    </div>` : ''}
 
     <!-- Score dimensions -->
     <h3 class="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-3">Score Breakdown</h3>
@@ -481,19 +560,25 @@ function renderDetailModal(d) {
           Save
         </button>
       </div>
-      <div id="decision-saved" class="hidden mt-2 text-xs text-green-600">Decision saved.</div>
+      <input id="owner-decision-notes" type="text" maxlength="2000" placeholder="Notes (optional), e.g. who approved"
+        value="${escHtml(d.owner_decision_notes || '')}"
+        class="w-full mt-2 border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+      <div id="decision-saved" class="hidden mt-2 text-xs"></div>
     </div>
   `;
 }
 
 async function saveOwnerDecision(datasetId) {
   const val = document.getElementById('owner-decision-sel').value;
-  await fetch(`/api/datasets/${datasetId}/decision`, {
+  const notes = document.getElementById('owner-decision-notes').value.trim();
+  const res = await apiFetch(`/api/datasets/${datasetId}/decision`, {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({dataset_id: datasetId, decision: val}),
+    body: JSON.stringify({dataset_id: datasetId, decision: val, notes}),
   });
-  document.getElementById('decision-saved').classList.remove('hidden');
+  const status = document.getElementById('decision-saved');
+  status.textContent = res.ok ? (val ? 'Decision saved.' : 'Decision cleared.') : `Could not save (HTTP ${res.status}).`;
+  status.className = `mt-2 text-xs ${res.ok ? 'text-green-600' : 'text-red-600'}`;
   await loadDatasets();
 }
 
@@ -531,7 +616,7 @@ async function connectToPBI() {
   };
 
   try {
-    const res = await fetch('/api/connect', {
+    const res = await apiFetch('/api/connect', {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
       body: JSON.stringify(body),
@@ -551,7 +636,7 @@ async function connectToPBI() {
 }
 
 async function resetDemo() {
-  await fetch('/api/reset-demo', {method:'POST'});
+  await apiFetch('/api/reset-demo', {method:'POST'});
   closeConnectModal();
   await loadSummary();
   await loadDatasets();
