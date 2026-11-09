@@ -4,8 +4,11 @@ on:
   push:
     branches:
       - main
-  pull_request:          # tests only – build and deploy are skipped for PRs
+  pull_request:          # tests only – deploy is skipped for PRs
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -28,58 +31,66 @@ jobs:
       - name: Run tests
         run: python -m pytest -q
 
-  build-and-push:
-    name: Build and push Docker image
+  deploy:
+    name: Build, push and deploy
     runs-on: ubuntu-latest
     needs: test
-    if: github.event_name != 'pull_request'
+    # Only main deploys; the Azure identity only trusts tokens for main anyway
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      id-token: write      # OIDC sign-in to Azure, no stored password
+    # Created by deploy/azure-setup.sh, which prints the values for these variables.
+    # The Container App already holds its secrets, mount and scale settings; this job
+    # only swaps the image.
+    env:
+      ACR_NAME: ${{ vars.ACR_NAME }}
+      RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP || 'rg-pbi-optimizer' }}
+      APP_NAME: ${{ vars.APP_NAME || 'power-bi-optimizer' }}
 
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Log in to Azure Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ secrets.REGISTRY_LOGIN_SERVER }}
-          username: ${{ secrets.REGISTRY_USERNAME }}
-          password: ${{ secrets.REGISTRY_PASSWORD }}
+      - name: Check configuration
+        run: |
+          if [ -z "$ACR_NAME" ]; then
+            echo "::error::Repository variable ACR_NAME is not set. Run deploy/azure-setup.sh and add the variables it prints."
+            exit 1
+          fi
 
-      - name: Build and push image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          tags: |
-            ${{ secrets.REGISTRY_LOGIN_SERVER }}/power-bi-optimizer:${{ github.sha }}
-            ${{ secrets.REGISTRY_LOGIN_SERVER }}/power-bi-optimizer:latest
-
-  deploy:
-    name: Deploy to Azure Container Apps
-    runs-on: ubuntu-latest
-    needs: build-and-push
-
-    steps:
       - name: Log in to Azure
         uses: azure/login@v2
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Deploy to Azure Container Apps
-        uses: azure/container-apps-deploy-action@v1
-        with:
-          containerAppName: power-bi-optimizer
-          resourceGroup: rg-pbi-optimizer
-          imageToDeploy: ${{ secrets.REGISTRY_LOGIN_SERVER }}/power-bi-optimizer:${{ github.sha }}
-          targetPort: 8000
-          ingress: external
-          environmentVariables: >
-            PBI_TENANT_ID=secretref:pbi-tenant-id
-            PBI_CLIENT_ID=secretref:pbi-client-id
-            PBI_CLIENT_SECRET=secretref:pbi-client-secret
-            OPTIMIZER_API_KEY=secretref:optimizer-api-key
-        env:
-          AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
-          # Secrets passed as Container Apps secrets (set via azure-setup.sh or portal)
-          # PBI_TENANT_ID, PBI_CLIENT_ID, PBI_CLIENT_SECRET and OPTIMIZER_API_KEY are stored in the
-          # Container App as secrets. The app refuses to start without OPTIMIZER_API_KEY.
+      - name: Build and push image
+        run: |
+          az acr login --name "$ACR_NAME"
+          IMAGE="$(az acr show --name "$ACR_NAME" --query loginServer -o tsv)/power-bi-optimizer"
+          docker build -t "$IMAGE:${{ github.sha }}" -t "$IMAGE:latest" .
+          docker push --all-tags "$IMAGE"
+          echo "IMAGE=$IMAGE:${{ github.sha }}" >> "$GITHUB_ENV"
+
+      - name: Deploy new image
+        run: |
+          az containerapp update --name "$APP_NAME" --resource-group "$RESOURCE_GROUP" \
+            --image "$IMAGE" -o none
+
+      - name: Check the new revision is up
+        run: |
+          # The old revision keeps serving until the new one is ready, so wait for the
+          # new revision itself rather than just any answer from /healthz
+          for i in $(seq 1 30); do
+            read -r LATEST READY FQDN < <(az containerapp show --name "$APP_NAME" --resource-group "$RESOURCE_GROUP" \
+              --query "[properties.latestRevisionName, properties.latestReadyRevisionName, properties.configuration.ingress.fqdn]" -o tsv | tr '\n' ' ')
+            if [ "$LATEST" = "$READY" ] && curl -fsS "https://$FQDN/healthz" >/dev/null; then
+              echo "Healthy: $LATEST at https://$FQDN"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::Revision $LATEST did not become ready within 5 minutes. Check the Container App's log stream (az containerapp logs show)."
+          exit 1

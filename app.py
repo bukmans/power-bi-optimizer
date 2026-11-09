@@ -4,6 +4,7 @@ Run:  python app.py
 Then open:  http://localhost:8000
 """
 
+import asyncio
 import copy
 import json
 import os
@@ -64,10 +65,22 @@ def require_api_key(key: Optional[str] = Security(api_key_header)):
                             headers={"WWW-Authenticate": "ApiKey"})
 
 
+def _auto_connect_enabled() -> bool:
+    return os.getenv("OPTIMIZER_AUTO_CONNECT", "true").strip().lower() not in ("0", "false", "no")
+
+
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
     check_auth_config()
+    # The dataset list lives in memory, so a restart (redeploy, scale-up) starts in demo
+    # mode. With PBI_* set on the server, reload live data in the background so the app
+    # is healthy straight away and switches to live once Power BI has been read.
+    task = None
+    if _auto_connect_enabled() and PBIClient().is_configured:
+        task = asyncio.create_task(_auto_connect())
     yield
+    if task and not task.done():
+        task.cancel()
 
 
 app = FastAPI(
@@ -144,6 +157,9 @@ _dataset_cache: dict[str, DatasetInput] = {}
 _bpa_overrides: dict[str, dict] = {}
 _decisions: dict[str, dict] = {}
 _mode: str = "demo"  # "demo" or "live"
+# Outcome of the last attempt to load live data: idle | connecting | connected | failed
+_connection: dict = {"state": "idle", "source": None, "error": None, "at": None}
+_connect_lock = asyncio.Lock()
 
 
 def _use_mode(mode: str) -> None:
@@ -166,9 +182,10 @@ _load_demo()
 
 # ── Pydantic models ────────────────────────────────────────────────────────────
 class ConnectionConfig(BaseModel):
-    tenant_id: str
-    client_id: str
-    client_secret: str
+    """Leave all three empty to use the service principal configured on the server (PBI_*)."""
+    tenant_id: str = ""
+    client_id: str = ""
+    client_secret: str = ""
 
 
 class BPAUpdate(BaseModel):
@@ -247,6 +264,46 @@ def _score_one(ds_id: str) -> dict:
     }
 
 
+class LiveConnectError(Exception):
+    pass
+
+
+async def _connect_live(client: PBIClient, source: str) -> int:
+    """Load all datasets the service principal can see and switch to live mode.
+
+    Raises LiveConnectError, and stays in the current mode, if nothing could be loaded.
+    """
+    global _dataset_cache
+    async with _connect_lock:
+        _connection.update(state="connecting", source=source, error=None,
+                           at=datetime.now(timezone.utc).isoformat(timespec="seconds"))
+        try:
+            try:
+                datasets = await client.fetch_all_datasets()
+            except Exception as e:
+                raise LiveConnectError(f"Could not load datasets from Power BI: {e}") from e
+            if not datasets:
+                raise LiveConnectError("No datasets found. Check service principal workspace access.")
+        except LiveConnectError as e:
+            _connection.update(state="failed", error=str(e))
+            print(f"  ! Power BI connect ({source}) failed: {e}", file=sys.stderr)
+            raise
+        _dataset_cache = {ds.dataset_id: ds for ds in datasets}
+        _use_mode("live")  # live decisions/overrides persist across reconnects (keyed by dataset GUID)
+        _connection.update(state="connected")
+        print(f"  Power BI connect ({source}): loaded {len(datasets)} datasets", file=sys.stderr)
+        return len(datasets)
+
+
+async def _auto_connect() -> None:
+    """Startup load with the server's credentials. A failure is logged and shown in
+    /api/status; the app keeps serving demo data rather than crashing."""
+    try:
+        await _connect_live(PBIClient(), source="startup")
+    except LiveConnectError:
+        pass
+
+
 def _score_all() -> list[dict]:
     results = [_score_one(ds_id) for ds_id in _dataset_cache]
     results.sort(key=lambda x: x["total_score"], reverse=True)
@@ -257,7 +314,12 @@ def _score_all() -> list[dict]:
 
 @app.get("/api/status", dependencies=[Depends(require_api_key)])
 def get_status():
-    return {"mode": _mode, "dataset_count": len(_dataset_cache)}
+    return {
+        "mode": _mode,
+        "dataset_count": len(_dataset_cache),
+        "server_credentials": PBIClient().is_configured,
+        "connection": dict(_connection),
+    }
 
 
 @app.get("/api/datasets", dependencies=[Depends(require_api_key)])
@@ -349,24 +411,33 @@ def get_summary():
 
 
 @app.post("/api/connect", dependencies=[Depends(require_api_key)])
-async def connect_to_pbi(config: ConnectionConfig):
-    """Connect to Power BI REST API and load real datasets."""
-    global _dataset_cache
+async def connect_to_pbi(config: Optional[ConnectionConfig] = None):
+    """Connect to Power BI REST API and load real datasets.
 
-    client = PBIClient(
-        tenant_id=config.tenant_id,
-        client_id=config.client_id,
-        client_secret=config.client_secret,
-    )
+    With no body (or all fields empty) the server's own PBI_* credentials are used, so the
+    client secret never has to be typed into the browser. Call again to re-read Power BI.
+    """
+    config = config or ConnectionConfig()
+    tenant_id, client_id, client_secret = (
+        f.strip() for f in (config.tenant_id, config.client_id, config.client_secret))
+    fields = (tenant_id, client_id, client_secret)
+    if all(fields):
+        client = PBIClient(tenant_id=tenant_id, client_id=client_id, client_secret=client_secret)
+    elif not any(fields):
+        client = PBIClient()
+        if not client.is_configured:
+            raise HTTPException(status_code=400, detail=(
+                "No Power BI credentials: set PBI_TENANT_ID, PBI_CLIENT_ID and "
+                "PBI_CLIENT_SECRET on the server, or enter all three."))
+    else:
+        raise HTTPException(status_code=422, detail=(
+            "Enter tenant ID, client ID and client secret, or leave all three empty "
+            "to use the server's credentials."))
     try:
-        datasets = await client.fetch_all_datasets()
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Could not load datasets from Power BI: {e}")
-    if not datasets:
-        raise HTTPException(status_code=400, detail="No datasets found. Check service principal workspace access.")
-    _dataset_cache = {ds.dataset_id: ds for ds in datasets}
-    _use_mode("live")  # live decisions/overrides persist across reconnects (keyed by dataset GUID)
-    return {"status": "connected", "dataset_count": len(_dataset_cache)}
+        count = await _connect_live(client, source="api")
+    except LiveConnectError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"status": "connected", "dataset_count": count}
 
 
 @app.post("/api/reset-demo", dependencies=[Depends(require_api_key)])
@@ -498,6 +569,10 @@ def serve_frontend():
 # ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
+    from dotenv import load_dotenv
+    # Local runs read .env (Docker Compose passes it via env_file; Azure uses app secrets).
+    # Set here, before uvicorn starts, so the reloader's worker process inherits it.
+    load_dotenv(Path(__file__).parent / ".env")
     host = os.getenv("HOST", "127.0.0.1")
     port = int(os.getenv("PORT", "8000"))
     if _configured_api_key() is None and not _auth_disabled():

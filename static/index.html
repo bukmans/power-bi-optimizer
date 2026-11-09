@@ -143,9 +143,14 @@
       <h2 class="text-lg font-semibold text-gray-900">Connect to Power BI</h2>
       <button onclick="closeConnectModal()" class="text-gray-400 hover:text-gray-600 text-xl">&times;</button>
     </div>
-    <p class="text-sm text-gray-500 mb-5">
-      Enter your Azure AD service principal credentials. The app needs
-      <strong>Dataset.Read.All</strong> and <strong>Workspace.Read.All</strong> permissions.
+    <p class="text-sm text-gray-500 mb-3">
+      Enter a Microsoft Entra service principal's credentials. It reads every workspace it
+      has been added to (Viewer is enough), and the Power BI admin must allow service
+      principals to use Fabric APIs.
+    </p>
+    <p id="server-creds-hint" class="hidden text-sm text-green-700 bg-green-50 rounded-lg px-3 py-2 mb-5">
+      This server has a service principal configured. Leave all fields blank to use it;
+      that also re-reads the latest datasets from Power BI.
     </p>
     <div class="space-y-4">
       <div>
@@ -592,9 +597,18 @@ document.getElementById('detail-modal').addEventListener('click', e => {
 });
 
 // ── Connect Modal ─────────────────────────────────────────────────────────────
-function openConnectModal() {
+async function openConnectModal() {
   document.getElementById('connect-modal').classList.remove('hidden');
   document.body.style.overflow = 'hidden';
+  const res = await apiFetch('/api/status');
+  if (!res.ok) return;
+  const s = await res.json();
+  document.getElementById('server-creds-hint').classList.toggle('hidden', !s.server_credentials);
+  if (s.connection && s.connection.state === 'failed') {
+    const errDiv = document.getElementById('connect-error');
+    errDiv.textContent = 'Last connection attempt failed: ' + s.connection.error;
+    errDiv.classList.remove('hidden');
+  }
 }
 
 function closeConnectModal() {
@@ -609,6 +623,7 @@ async function connectToPBI() {
   btn.textContent = 'Connecting...';
   btn.disabled = true;
 
+  // All blank = use the server's own credentials (PBI_* settings)
   const body = {
     tenant_id: document.getElementById('inp-tenant').value.trim(),
     client_id: document.getElementById('inp-client').value.trim(),
@@ -623,6 +638,7 @@ async function connectToPBI() {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || 'Connection failed');
+    document.getElementById('inp-secret').value = '';
     closeConnectModal();
     await loadSummary();
     await loadDatasets();

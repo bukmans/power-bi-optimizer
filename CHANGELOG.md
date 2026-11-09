@@ -15,6 +15,28 @@ Fixes from the October 2026 code review. Each entry links to the tests that cove
   and pull requests run the tests without deploying.
 
 ### Fixed
+- **Azure deployment could not succeed on a first run.** The workflow referenced Container App
+  secrets that nothing created, gave the new app no registry credentials, and the docs set the
+  API key only after a deploy that needed it. `deploy/azure-setup.sh` now creates the Container
+  App up front with its secrets, registry access, an Azure Files mount at `/app/data` and exactly
+  one replica; the workflow only swaps the image and waits for the new revision to be healthy.
+  The script is idempotent and the region is configurable (`LOCATION`, default `eastus2`).
+- **GitHub deploys used a long-lived, subscription-wide credential.** `AZURE_CREDENTIALS`
+  (`--sdk-auth`, deprecated) and the `REGISTRY_*` password secrets are replaced by OIDC sign-in
+  (`deploy/github-oidc-setup.sh`) scoped to `main` and to the resource group.
+- **Live data was lost on every restart.** The dataset list is in memory and the `PBI_*` settings
+  were never read, so each redeploy or scale-to-zero dropped back to demo data, and the only way
+  back was typing the client secret into the dashboard. With `PBI_*` set the app now loads live
+  data in the background on start (`OPTIMIZER_AUTO_CONNECT=false` turns this off);
+  `POST /api/connect` with an empty body re-reads Power BI with the server's credentials; and
+  `GET /api/status` reports the last load's state and error. (`tests/test_auto_connect.py`)
+- **Power BI sign-in blocked the server.** The MSAL token call is synchronous and ran on the
+  event loop, stalling startup and every request until Entra ID answered. It now runs in a thread.
+- **`python app.py` ignored `.env`** despite the README. It is now loaded for local runs.
+- **README told users to grant Power BI API permissions** with admin consent; service principals
+  need none (only the tenant setting and workspace membership). Docs corrected, and the
+  dashboard's connect dialog no longer asks for them.
+- Container user pinned to uid 1000 so the Azure Files mount options match.
 - **Search endpoint always returned 404.** `GET /api/datasets/search` was declared after
   `GET /api/datasets/{dataset_id}`, so "search" was treated as a dataset id. Route moved
   above the parameterised route. Restores the Copilot Studio name search. (`tests/test_search.py`)
