@@ -40,72 +40,119 @@ The `restart: unless-stopped` policy means the app survives reboots automaticall
 
 ## Option C — Azure Container Apps (Production)
 
-Full CI/CD: every push to `main` builds and deploys automatically.
+Every push to `main` is tested, built and deployed by GitHub Actions. The scripts below are
+easiest to run in **Azure Cloud Shell** (bash), which already has Azure CLI and openssl:
+portal.azure.com → Cloud Shell → Bash, then `git clone` this repo.
 
-### Prerequisites
+### What you need
 
-- [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) installed
-- An active Azure subscription
-- A GitHub repository with Actions enabled
+| Who | Access |
+|---|---|
+| You | **Contributor** on the resource group (or on the subscription, to create it) |
+| Subscription owner, once | Register the `Microsoft.App`, `Microsoft.ContainerRegistry`, `Microsoft.OperationalInsights` and `Microsoft.Storage` resource providers |
+| Entra admin, or you with **Application Developer** | Create two app registrations: the Power BI reader and the GitHub deployer |
+| Owner / User Access Administrator on the resource group | One role assignment for the GitHub deployer (Step 2) |
+| Fabric administrator | Enable *Service principals can use Fabric APIs* for a security group with the reader app in it (main README, "Connecting to Real Power BI Data") |
+| Workspace admins | Add the reader app to each workspace as **Viewer** |
+| GitHub repo admin | Add Actions secrets and variables |
 
-### Step 1 — Provision Azure infrastructure (one time)
+### Step 1 — Provision Azure (one time)
 
 ```bash
-az login
+az login                       # not needed in Cloud Shell
+export LOCATION=eastus2        # a region your organisation allows
+# Optional now, or add later (see "Changing secrets"): the Power BI reader app
+export PBI_TENANT_ID=... PBI_CLIENT_ID=... PBI_CLIENT_SECRET=...
 bash deploy/azure-setup.sh
 ```
 
-The script creates:
-- A Resource Group (`rg-pbi-optimizer`)
-- An Azure Container Registry (Basic SKU)
-- A Container Apps Environment
+The script creates (and on re-runs, keeps):
+- Resource group `rg-pbi-optimizer`
+- Container registry (Basic)
+- Storage account + file share, mounted at `/app/data`, so owner decisions and BPA results
+  survive redeploys
+- Container Apps environment
+- The Container App itself: its secrets (API key, Power BI credentials, registry password),
+  external HTTPS ingress on port 8000, and **exactly one replica** (the state file supports
+  one writer, and it avoids scale-to-zero restarts)
 
-At the end it prints the values you need for the next step.
+It prints the **API key** once (save it in a password manager or Key Vault) and three
+GitHub **variables**: `ACR_NAME`, `RESOURCE_GROUP`, `APP_NAME`.
 
-### Step 2 — Add GitHub Secrets
+The app runs a placeholder image until the first deploy in Step 3.
 
-Go to your repo → **Settings → Secrets and variables → Actions → New repository secret**.
-
-| Secret name | Where to find it |
-|---|---|
-| `AZURE_CREDENTIALS` | `az ad sp create-for-rbac --role contributor --scopes /subscriptions/<id> --sdk-auth` |
-| `REGISTRY_LOGIN_SERVER` | Printed by azure-setup.sh (e.g. `pbioptimizer12345.azurecr.io`) |
-| `REGISTRY_USERNAME` | Printed by azure-setup.sh (ACR admin username) |
-| `REGISTRY_PASSWORD` | `az acr credential show --name <acr-name> --query passwords[0].value -o tsv` |
-| `PBI_TENANT_ID` | Azure portal → Microsoft Entra ID → Overview → Tenant ID |
-| `PBI_CLIENT_ID` | Azure portal → App registrations → your app → Application (client) ID |
-| `PBI_CLIENT_SECRET` | Azure portal → App registrations → your app → Certificates & secrets |
-
-Then set the API key as a Container App secret (the app refuses to start without it):
+### Step 2 — GitHub deployment identity (one time)
 
 ```bash
-az containerapp secret set --name power-bi-optimizer --resource-group rg-pbi-optimizer   --secrets optimizer-api-key=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
+GITHUB_REPO=<owner>/<repo> bash deploy/github-oidc-setup.sh
 ```
+
+This creates an app registration that trusts GitHub's sign-in tokens for pushes to `main`
+(OIDC: no password to store or rotate) and gives it **Contributor on the resource group
+only**. It prints `AZURE_CLIENT_ID`, `AZURE_TENANT_ID` and `AZURE_SUBSCRIPTION_ID`.
+
+In GitHub → **Settings → Secrets and variables → Actions**:
+- **Secrets**: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`
+- **Variables**: `ACR_NAME`, `RESOURCE_GROUP`, `APP_NAME`
+
+If an admin creates the identity for you instead, they need: an app registration with a
+federated credential (issuer `https://token.actions.githubusercontent.com`, subject
+`repo:<owner>/<repo>:ref:refs/heads/main`, audience `api://AzureADTokenExchange`) and
+Contributor on the resource group.
 
 ### Step 3 — Deploy
 
-Push any commit to `main` (or trigger manually via **Actions → Run workflow**).
+Push to `main`, or **Actions → Deploy to Azure Container Apps → Run workflow** on `main`.
+The workflow runs the tests, builds the image, pushes it to the registry, points the
+Container App at it and waits until the new revision answers `/healthz`.
 
-GitHub Actions will:
-1. Build the Docker image and push it to ACR (tagged with git SHA and `latest`).
-2. Deploy the new image to Azure Container Apps with external ingress on port 8000.
+The URL is printed in the workflow log and shown in the portal (Container App → Application URL).
 
-The public URL is shown in the Azure portal under Container Apps → your app → Application URL.
+### Step 4 — Check it
 
-### Persisting owner decisions
+```bash
+curl https://<app-url>/healthz
+curl -H "X-API-Key: <key>" https://<app-url>/api/status
+```
 
-Owner decisions and BPA overrides are saved to `/app/data/state.json`. A container's local disk is
-lost on every redeploy, so mount an Azure Files share at `/app/data`
-([Container Apps storage mounts](https://learn.microsoft.com/azure/container-apps/storage-mounts)).
-The file store supports a **single replica** – keep `--max-replicas 1`, or move the state to a
-database before scaling out. With Docker Compose this is handled by the `optimizer-data` volume.
+`/api/status` → `"mode": "live"` and `"connection": {"state": "connected"}` means Power BI
+was read. `"failed"` includes the error (most often: the tenant setting is off, the app is
+in no workspace, or the client secret is wrong or expired).
 
-### Security note
+### Changing secrets
 
-The service principal created in Step 2 should follow least-privilege. Grant it only
-`Contributor` on the specific resource group (`rg-pbi-optimizer`), not on the whole
-subscription. The Power BI service principal needs only `Viewer` access to the
-workspaces it must read — never `Admin`.
+Container App secrets only reach the app on a new revision, so restart after changing them:
+
+```bash
+RG=rg-pbi-optimizer; APP=power-bi-optimizer
+# Add or replace the Power BI reader credentials
+az containerapp secret set -n $APP -g $RG --secrets   pbi-tenant-id=<tenant> pbi-client-id=<client> pbi-client-secret=<secret>
+az containerapp update -n $APP -g $RG --set-env-vars   PBI_TENANT_ID=secretref:pbi-tenant-id PBI_CLIENT_ID=secretref:pbi-client-id   PBI_CLIENT_SECRET=secretref:pbi-client-secret
+# Rotate the API key (then update the Copilot Studio connection and notebook secret)
+az containerapp secret set -n $APP -g $RG --secrets optimizer-api-key=$(openssl rand -hex 32)
+az containerapp revision restart -n $APP -g $RG   --revision $(az containerapp show -n $APP -g $RG --query properties.latestRevisionName -o tsv)
+```
+
+Client secrets expire (24 months at most): note the date and rotate before then.
+
+### Logs
+
+```bash
+az containerapp logs show -n power-bi-optimizer -g rg-pbi-optimizer --follow
+```
+
+### Security notes
+
+- The GitHub identity has Contributor on the optimizer's resource group only, and only
+  workflows on `main` can sign in as it.
+- The Power BI reader needs no Entra API permissions, and only **Viewer** on the workspaces
+  it must read, never Admin.
+- The registry uses its admin account so the Container App can pull without a role
+  assignment. If your policies disable registry admin accounts, give the Container App a
+  managed identity with **AcrPull** instead (`az containerapp registry set --identity system`).
+- The storage account uses an account key for the file share mount (required by Container
+  Apps for Azure Files). If shared-key access is blocked by policy, ask for an exemption
+  for this account.
 
 ---
 

@@ -15,7 +15,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Create a non-root user and switch to it
-RUN adduser --disabled-password --gecos "" appuser \
+RUN adduser --disabled-password --gecos "" --uid 1000 appuser \
     && mkdir -p /app/data && chown appuser /app/data
 USER appuser
 

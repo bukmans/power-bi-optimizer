@@ -22,6 +22,10 @@ def _isolated_env(monkeypatch, tmp_path):
     monkeypatch.setenv("OPTIMIZER_API_KEY", TEST_API_KEY)
     monkeypatch.delenv("OPTIMIZER_AUTH_DISABLED", raising=False)
     monkeypatch.setenv("OPTIMIZER_STATE_FILE", str(tmp_path / "state.json"))
+    # Never reach a real tenant from a developer machine that has these set
+    for var in ("PBI_TENANT_ID", "PBI_CLIENT_ID", "PBI_CLIENT_SECRET", "OPTIMIZER_AUTO_CONNECT"):
+        monkeypatch.delenv(var, raising=False)
+    app_module._connection.update(state="idle", source=None, error=None, at=None)
     app_module._state = app_module._load_state()
     app_module._load_demo()
 

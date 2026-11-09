@@ -100,6 +100,10 @@ class PBIClient:
         /api/datasets/{id}/bpa-update, and post usage from the activity log.
         """
         sem = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
+        if not self._token:
+            # MSAL is synchronous and calls Entra ID over the network: keep it off the
+            # event loop so health checks and other requests are served meanwhile
+            self._token = await asyncio.to_thread(self._get_token)
         async with self._http() as client:
             workspaces = await self.list_workspaces(client)
 

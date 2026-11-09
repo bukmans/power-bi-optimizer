@@ -152,47 +152,44 @@ The platform launches immediately with **10 realistic demo datasets** across 8 w
 
 ## Connecting to Real Power BI Data
 
-### Step 1 — Register an Azure AD app
+### Step 1 — Register an app in Microsoft Entra ID
 
-1. Go to [portal.azure.com](https://portal.azure.com) → **Azure Active Directory** → **App registrations** → **New registration**
+1. [portal.azure.com](https://portal.azure.com) → **Microsoft Entra ID** → **App registrations** → **New registration**
 2. Name it `pbi-migration-optimizer`, leave defaults, click **Register**
 3. Copy the **Application (client) ID** and **Directory (tenant) ID** from the Overview page
-4. Go to **Certificates & secrets** → **New client secret** → copy the secret **value** immediately
+4. **Certificates & secrets** → **New client secret** → copy the secret **value** immediately
 
-### Step 2 — Grant Power BI API permissions
+Do **not** add Power BI API permissions to the app. A service principal's access comes from
+the tenant setting and workspace membership below; Microsoft advises against adding
+admin-consent Power BI permissions for service principals, as they can cause errors.
 
-1. In your app registration → **API permissions** → **Add a permission**
-2. Select **Power BI Service** → **Application permissions**
-3. Add these permissions:
-   - `Dataset.Read.All`
-   - `Workspace.Read.All`
-   - `Report.Read.All`
-4. Click **Grant admin consent**
+### Step 2 — Allow the service principal in Power BI (Fabric administrator)
 
-### Step 3 — Enable service principal access in Power BI
+1. Create a Microsoft Entra security group (e.g. `sg-pbi-optimizer`) and add the app to it
+2. Fabric/Power BI Admin portal → **Tenant settings** → **Developer settings** → enable
+   **"Service principals can use Fabric APIs"** for that security group only
+3. In each workspace to assess → **Manage access** → add the app as **Viewer**
+   (the app only sees workspaces it is a member of; if refresh history comes back empty,
+   try **Contributor**)
 
-1. Power BI Admin portal → **Tenant settings**
-2. Under **Developer settings** → enable **"Allow service principals to use Power BI APIs"**
-3. In each relevant workspace → **Access** → add your app as **Viewer** or **Member**
+### Step 3 — Connect
 
-### Step 4 — Connect
+**On a server (recommended):** set `PBI_TENANT_ID`, `PBI_CLIENT_ID` and `PBI_CLIENT_SECRET`
+as server settings (`deploy/azure-setup.sh` does this on Azure). The app loads live data
+automatically on every start, so restarts and redeploys don't fall back to demo data.
+`GET /api/status` shows whether the last load worked. To re-read Power BI later, click
+**Connect to Power BI** and leave the fields blank. Set `OPTIMIZER_AUTO_CONNECT=false`
+to start in demo mode anyway.
 
-**Option A: Via the UI**
-Click **Connect to Power BI** in the top navigation bar and enter your credentials.
-
-**Option B: Via environment variables**
+**Locally:**
 ```bash
 cp .env.example .env
 # Edit .env and fill in your values
 python app.py
 ```
 
-`.env` format:
-```env
-PBI_TENANT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-PBI_CLIENT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-PBI_CLIENT_SECRET=your-secret-value
-```
+**Ad hoc:** click **Connect to Power BI** and enter all three values. They are used for that
+load only and are not saved, so the app returns to demo data on restart.
 
 ---
 
@@ -293,7 +290,7 @@ http://localhost:8000
 | `GET` | `/api/datasets/{id}` | Full detail for one dataset |
 | `POST` | `/api/datasets/{id}/bpa-update` | Post BPA/metric enrichment from Semantic Link |
 | `POST` | `/api/datasets/{id}/decision` | Save owner migration decision |
-| `POST` | `/api/connect` | Connect to Power BI REST API |
+| `POST` | `/api/connect` | Load datasets from Power BI (empty body = server credentials) |
 | `POST` | `/api/reset-demo` | Switch back to demo data |
 | `GET` | `/api/export/csv` | Download full migration report as CSV |
 

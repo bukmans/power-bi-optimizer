@@ -1,0 +1,2 @@
+# Shell scripts are run in Cloud Shell / Linux: keep LF endings on every checkout
+*.sh text eol=lf

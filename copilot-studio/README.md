@@ -253,7 +253,7 @@ copilot-studio/
 | Problem | Fix |
 |---|---|
 | Connector returns 401 | Check `OPTIMIZER_API_KEY` env var on the backend matches the key in the Power Platform connection |
-| Connector returns 404 on search | The backend is running in demo mode — connect it to Power BI first via the web dashboard |
+| Connector returns 404 on search | The backend is in demo mode. Check `GET /api/status`: `connection.state` should be `connected`; if it is `failed`, the error says why (see `deploy/README.md`, Step 4) |
 | Adaptive Card doesn't render | Verify the JSON is valid at [adaptivecards.io/designer](https://adaptivecards.io/designer) |
 | Agent not appearing in Teams | Re-publish the agent and wait 5 minutes for Teams to sync |
 | Topic not triggering | Add more trigger phrases; Copilot Studio needs at least 5 varied examples |
